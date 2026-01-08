@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pizza Demo - Лучшая пицца в городе</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&display=swap');
+        body { font-family: 'Montserrat', sans-serif; -webkit-tap-highlight-color: transparent; }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .active-category { background-color: #ef4444; color: white; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 pb-20">
+
+    <!-- Header -->
+    <header class="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-gray-100 shadow-sm">
+        <div class="container mx-auto px-4 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <div class="w-10 h-10 bg-red-500 rounded-full flex items-center justify-center text-white">
+                    <i class="fas fa-pizza-slice"></i>
+                </div>
+                <span class="font-extrabold text-xl tracking-tight uppercase text-red-600">Pizza<span class="text-gray-800">Go</span></span>
+            </div>
+            <button onclick="toggleCart()" class="relative p-2 text-gray-700">
+                <i class="fas fa-shopping-basket text-2xl"></i>
+                <span id="cart-count" class="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full hidden">0</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Categories (Horizontal Scroll) -->
+    <div class="sticky top-16 z-40 bg-white shadow-sm border-b border-gray-100">
+        <div class="flex gap-2 overflow-x-auto p-4 hide-scrollbar" id="categories-container">
+            <button onclick="filterCategory('all')" class="category-btn active-category whitespace-nowrap px-6 py-2 rounded-full text-sm font-semibold transition-all">Все</button>
+            <button onclick="filterCategory('meat')" class="category-btn bg-gray-100 whitespace-nowrap px-6 py-2 rounded-full text-sm font-semibold transition-all">Мясные</button>
+            <button onclick="filterCategory('cheese')" class="category-btn bg-gray-100 whitespace-nowrap px-6 py-2 rounded-full text-sm font-semibold transition-all">Сырные</button>
+            <button onclick="filterCategory('veggie')" class="category-btn bg-gray-100 whitespace-nowrap px-6 py-2 rounded-full text-sm font-semibold transition-all">Вегетарианские</button>
+            <button onclick="filterCategory('spicy')" class="category-btn bg-gray-100 whitespace-nowrap px-6 py-2 rounded-full text-sm font-semibold transition-all">Острые</button>
+        </div>
+    </div>
+
+    <!-- Hero Section -->
+    <section class="px-4 py-6">
+        <div class="relative overflow-hidden rounded-3xl bg-orange-500 p-8 text-white h-48 flex items-center">
+            <div class="relative z-10 max-w-[60%]">
+                <h1 class="text-2xl font-extrabold leading-tight mb-2">Скидка -20% на первую пиццу!</h1>
+                <p class="text-xs opacity-90">Промокод: START20</p>
+                <button class="mt-4 bg-white text-orange-600 px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider">Забрать</button>
+            </div>
+            <div class="absolute -right-10 -bottom-10 w-56 h-56 rotate-12 opacity-50">
+                <i class="fas fa-pizza-slice text-[180px]"></i>
+            </div>
+        </div>
+    </section>
+
+    <!-- Catalog -->
+    <main class="container mx-auto px-4 mb-10">
+        <h2 class="text-2xl font-bold mb-6" id="catalog-title">Популярное</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6" id="pizza-grid">
+            <!-- Pizzas will be rendered here -->
+        </div>
+    </main>
+
+    <!-- Cart Sidebar / Bottom Sheet -->
+    <div id="cart-modal" class="fixed inset-0 z-[60] hidden">
+        <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" onclick="toggleCart()"></div>
+        <div class="absolute bottom-0 left-0 right-0 bg-white rounded-t-3xl min-h-[50vh] max-h-[90vh] flex flex-col transform transition-transform duration-300 translate-y-full" id="cart-content">
+            <div class="flex items-center justify-between p-6 border-b border-gray-100">
+                <h3 class="text-xl font-bold">Корзина</h3>
+                <button onclick="toggleCart()" class="text-gray-400 text-2xl"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-6" id="cart-items">
+                <!-- Cart items will be rendered here -->
+                <div class="text-center py-10 text-gray-500">
+                    <i class="fas fa-shopping-cart text-5xl mb-4 opacity-20"></i>
+                    <p>В корзине пока пусто</p>
+                </div>
+            </div>
+            <div class="p-6 bg-gray-50 border-t border-gray-100" id="cart-footer">
+                <div class="flex justify-between items-center mb-4">
+                    <span class="text-gray-600">Итого:</span>
+                    <span class="text-2xl font-extrabold text-red-600" id="cart-total">0 ₽</span>
+                </div>
+                <button onclick="checkout()" class="w-full bg-red-500 text-white py-4 rounded-2xl font-bold text-lg shadow-lg shadow-red-200 active:scale-95 transition-all">Оформить заказ</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mobile Bottom Navigation -->
+    <nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 px-6 py-3 flex justify-between items-center md:hidden z-50">
+        <button class="flex flex-col items-center gap-1 text-red-500">
+            <i class="fas fa-utensils text-xl"></i>
+            <span class="text-[10px] font-bold">Меню</span>
+        </button>
+        <button class="flex flex-col items-center gap-1 text-gray-400">
+            <i class="fas fa-heart text-xl"></i>
+            <span class="text-[10px] font-bold">Любимое</span>
+        </button>
+        <button onclick="toggleCart()" class="flex flex-col items-center gap-1 text-gray-400 relative">
+            <i class="fas fa-shopping-basket text-xl"></i>
+            <span class="text-[10px] font-bold">Корзина</span>
+            <span id="nav-cart-count" class="absolute -top-1 -right-2 bg-red-500 text-white text-[9px] font-bold px-1 py-0.5 rounded-full hidden">0</span>
+        </button>
+        <button class="flex flex-col items-center gap-1 text-gray-400">
+            <i class="fas fa-user text-xl"></i>
+            <span class="text-[10px] font-bold">Профиль</span>
+        </button>
+    </nav>
+
+    <script>
+        const pizzas = [
+            { id: 1, name: "Пепперони", price: 549, image: "https://images.unsplash.com/photo-1628840042765-356cda07504e?w=500&auto=format", category: "meat", desc: "Пикантная пепперони, много моцареллы, томатный соус" },
+            { id: 2, name: "Четыре сыра", price: 629, image: "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=500&auto=format", category: "cheese", desc: "Сырный соус, моцарелла, пармезан, чеддер, блю чиз" },
+            { id: 3, name: "Мясной микс", price: 699, image: "https://images.unsplash.com/photo-1571407970349-bc81e7e96d47?w=500&auto=format", category: "meat", desc: "Говядина, ветчина, пепперони, бекон, томаты" },
+            { id: 4, name: "Маргарита", price: 449, image: "https://images.unsplash.com/photo-1574071318508-1cdbad80ad50?w=500&auto=format", category: "veggie", desc: "Томаты, моцарелла, базилик, итальянские травы" },
+            { id: 5, name: "Острая Чили", price: 589, image: "https://images.unsplash.com/photo-1585238342024-78d387f4a707?w=500&auto=format", category: "spicy", desc: "Перец чили, халапеньо, мясной соус, болгарский перец" },
+            { id: 6, name: "Грибная", price: 499, image: "https://images.unsplash.com/photo-1594007654729-407eedc4be65?w=500&auto=format", category: "veggie", desc: "Шампиньоны, белые грибы, сливочный соус, лук" }
+        ];
+
+        let cart = [];
+
+        function renderPizzas(filteredPizzas = pizzas) {
+            const grid = document.getElementById('pizza-grid');
+            grid.innerHTML = filteredPizzas.map(pizza => `
+                <div class="bg-white rounded-[2rem] overflow-hidden shadow-sm hover:shadow-xl transition-all duration-300 group border border-gray-100">
+                    <div class="relative overflow-hidden h-48">
+                        <img src="${pizza.image}" alt="${pizza.name}" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500">
+                        <div class="absolute top-4 left-4">
+                            <span class="bg-white/90 backdrop-blur-sm px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest text-red-500">Hot</span>
+                        </div>
+                    </div>
+                    <div class="p-6">
+                        <h3 class="text-lg font-bold mb-2">${pizza.name}</h3>
+                        <p class="text-xs text-gray-500 mb-4 line-clamp-2">${pizza.desc}</p>
+                        <div class="flex items-center justify-between mt-auto">
+                            <span class="text-xl font-extrabold">от ${pizza.price} ₽</span>
+                            <button onclick="addToCart(${pizza.id})" class="bg-red-50 text-red-500 px-5 py-2 rounded-xl font-bold text-sm hover:bg-red-500 hover:text-white transition-colors flex items-center gap-2">
+                                <i class="fas fa-plus"></i>
+                                В корзину
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function filterCategory(category) {
+            // UI updates
+            document.querySelectorAll('.category-btn').forEach(btn => {
+                btn.classList.remove('active-category', 'bg-red-500', 'text-white');
+                btn.classList.add('bg-gray-100');
+            });
+            event.target.classList.remove('bg-gray-100');
+            event.target.classList.add('active-category');
+
+            const filtered = category === 'all' ? pizzas : pizzas.filter(p => p.category === category);
+            renderPizzas(filtered);
+            document.getElementById('catalog-title').innerText = category === 'all' ? 'Популярное' : event.target.innerText;
+        }
+
+        function toggleCart() {
+            const modal = document.getElementById('cart-modal');
+            const content = document.getElementById('cart-content');
+            
+            if (modal.classList.contains('hidden')) {
+                modal.classList.remove('hidden');
+                setTimeout(() => content.classList.remove('translate-y-full'), 10);
+            } else {
+                content.classList.add('translate-y-full');
+                setTimeout(() => modal.classList.add('hidden'), 300);
+            }
+            renderCart();
+        }
+
+        function addToCart(id) {
+            const pizza = pizzas.find(p => p.id === id);
+            const inCart = cart.find(item => item.id === id);
+            
+            if (inCart) {
+                inCart.quantity += 1;
+            } else {
+                cart.push({ ...pizza, quantity: 1 });
+            }
+            updateCartCount();
+            
+            // Notification effect
+            const btn = event.target.closest('button');
+            const originalHtml = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-check"></i> Добавлено';
+            btn.classList.replace('bg-red-50', 'bg-green-500');
+            btn.classList.replace('text-red-500', 'text-white');
+            
+            setTimeout(() => {
+                btn.innerHTML = originalHtml;
+                btn.classList.replace('bg-green-500', 'bg-red-50');
+                btn.classList.replace('text-white', 'text-red-500');
+            }, 1000);
+        }
+
+        function updateCartCount() {
+            const count = cart.reduce((sum, item) => sum + item.quantity, 0);
+            const countElements = [document.getElementById('cart-count'), document.getElementById('nav-cart-count')];
+            
+            countElements.forEach(el => {
+                if (count > 0) {
+                    el.innerText = count;
+                    el.classList.remove('hidden');
+                } else {
+                    el.classList.add('hidden');
+                }
+            });
+        }
+
+        function renderCart() {
+            const itemsContainer = document.getElementById('cart-items');
+            const totalElement = document.getElementById('cart-total');
+            
+            if (cart.length === 0) {
+                itemsContainer.innerHTML = `
+                    <div class="text-center py-10 text-gray-500">
+                        <i class="fas fa-shopping-cart text-5xl mb-4 opacity-20"></i>
+                        <p>В корзине пока пусто</p>
+                    </div>
+                `;
+                totalElement.innerText = '0 ₽';
+                return;
+            }
+
+            itemsContainer.innerHTML = cart.map(item => `
+                <div class="flex items-center gap-4 mb-6 last:mb-0">
+                    <img src="${item.image}" class="w-16 h-16 rounded-xl object-cover">
+                    <div class="flex-1">
+                        <h4 class="font-bold text-sm">${item.name}</h4>
+                        <p class="text-xs text-gray-500">${item.price} ₽</p>
+                    </div>
+                    <div class="flex items-center gap-3 bg-gray-100 rounded-lg px-2 py-1">
+                        <button onclick="changeQty(${item.id}, -1)" class="w-6 h-6 flex items-center justify-center text-gray-500"><i class="fas fa-minus text-[10px]"></i></button>
+                        <span class="font-bold text-sm">${item.quantity}</span>
+                        <button onclick="changeQty(${item.id}, 1)" class="w-6 h-6 flex items-center justify-center text-gray-500"><i class="fas fa-plus text-[10px]"></i></button>
+                    </div>
+                </div>
+            `).join('');
+
+            const total = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+            totalElement.innerText = `${total} ₽`;
+        }
+
+        function changeQty(id, delta) {
+            const index = cart.findIndex(item => item.id === id);
+            if (index === -1) return;
+
+            cart[index].quantity += delta;
+            if (cart[index].quantity <= 0) {
+                cart.splice(index, 1);
+            }
+            renderCart();
+            updateCartCount();
+        }
+
+        function checkout() {
+            if (cart.length === 0) return alert('Добавьте товары в корзину');
+            alert('Спасибо за заказ! Наш менеджер свяжется с вами в ближайшее время.');
+            cart = [];
+            updateCartCount();
+            toggleCart();
+        }
+
+        // Init
+        renderPizzas();
+    </script>
+</body>
+</html>

@@ -1,0 +1,1202 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#FF5722">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>🍕 PizzaVibe - Доставка пиццы</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #FF5722;
+            --primary-dark: #E64A19;
+            --primary-light: #FF8A65;
+            --secondary: #FFC107;
+            --background: #F5F5F5;
+            --surface: #FFFFFF;
+            --text-primary: #212121;
+            --text-secondary: #757575;
+            --text-light: #9E9E9E;
+            --border: #E0E0E0;
+            --success: #4CAF50;
+            --shadow-sm: 0 2px 8px rgba(0,0,0,0.08);
+            --shadow-md: 0 4px 16px rgba(0,0,0,0.12);
+            --shadow-lg: 0 8px 24px rgba(0,0,0,0.16);
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+            --radius-xl: 24px;
+            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            --safe-bottom: env(safe-area-inset-bottom, 0px);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Poppins', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--background);
+            color: var(--text-primary);
+            line-height: 1.5;
+            padding-bottom: calc(80px + var(--safe-bottom));
+            min-height: 100vh;
+        }
+
+        /* Header Styles */
+        .header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: var(--surface);
+            padding: 12px 16px;
+            z-index: 100;
+            box-shadow: var(--shadow-sm);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-top: calc(12px + env(safe-area-inset-top, 0px));
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            text-decoration: none;
+        }
+
+        .logo-icon {
+            font-size: 28px;
+        }
+
+        .logo-text {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .location {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            background: var(--background);
+            padding: 6px 12px;
+            border-radius: 20px;
+        }
+
+        .location-icon {
+            color: var(--primary);
+        }
+
+        /* Category Navigation */
+        .categories {
+            position: fixed;
+            top: calc(68px + env(safe-area-inset-top, 0px));
+            left: 0;
+            right: 0;
+            background: var(--surface);
+            padding: 12px 0;
+            z-index: 99;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .categories-scroll {
+            display: flex;
+            gap: 10px;
+            padding: 0 16px;
+            overflow-x: auto;
+            scroll-snap-type: x mandatory;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+        }
+
+        .categories-scroll::-webkit-scrollbar {
+            display: none;
+        }
+
+        .category-btn {
+            flex-shrink: 0;
+            padding: 10px 18px;
+            border: none;
+            border-radius: 25px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            scroll-snap-align: center;
+            transition: var(--transition);
+            background: var(--background);
+            color: var(--text-secondary);
+        }
+
+        .category-btn.active {
+            background: var(--primary);
+            color: white;
+            box-shadow: 0 4px 12px rgba(255, 87, 34, 0.3);
+        }
+
+        .category-btn:active {
+            transform: scale(0.95);
+        }
+
+        .category-icon {
+            margin-right: 6px;
+        }
+
+        /* Main Content */
+        .main {
+            margin-top: calc(140px + env(safe-area-inset-top, 0px));
+            padding: 16px;
+        }
+
+        .section-title {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            color: var(--text-primary);
+        }
+
+        /* Promo Banner */
+        .promo-banner {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+            margin-bottom: 24px;
+            color: white;
+            position: relative;
+            overflow: hidden;
+            box-shadow: var(--shadow-md);
+        }
+
+        .promo-banner::after {
+            content: '🍕';
+            position: absolute;
+            right: -10px;
+            bottom: -20px;
+            font-size: 100px;
+            opacity: 0.2;
+            transform: rotate(-15deg);
+        }
+
+        .promo-title {
+            font-size: 22px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .promo-subtitle {
+            font-size: 14px;
+            opacity: 0.9;
+            margin-bottom: 12px;
+        }
+
+        .promo-btn {
+            display: inline-block;
+            background: white;
+            color: var(--primary);
+            padding: 10px 20px;
+            border-radius: 25px;
+            font-size: 14px;
+            font-weight: 600;
+            text-decoration: none;
+            box-shadow: var(--shadow-sm);
+        }
+
+        /* Pizza Grid */
+        .pizza-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 16px;
+        }
+
+        @media (min-width: 480px) {
+            .pizza-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (min-width: 768px) {
+            .pizza-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+
+        @media (min-width: 1024px) {
+            .pizza-grid {
+                grid-template-columns: repeat(4, 1fr);
+            }
+        }
+
+        /* Pizza Card */
+        .pizza-card {
+            background: var(--surface);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            box-shadow: var(--shadow-sm);
+            transition: var(--transition);
+            position: relative;
+        }
+
+        .pizza-card:hover {
+            transform: translateY(-4px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .pizza-card:active {
+            transform: scale(0.98);
+        }
+
+        .pizza-image {
+            width: 100%;
+            aspect-ratio: 1;
+            object-fit: cover;
+            background: var(--background);
+        }
+
+        .pizza-info {
+            padding: 16px;
+        }
+
+        .pizza-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 8px;
+        }
+
+        .pizza-name {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-primary);
+            flex: 1;
+            padding-right: 8px;
+        }
+
+        .pizza-weight {
+            font-size: 12px;
+            color: var(--text-light);
+            background: var(--background);
+            padding: 4px 8px;
+            border-radius: 12px;
+        }
+
+        .pizza-description {
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 12px;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            line-height: 1.4;
+        }
+
+        .pizza-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .pizza-price {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .pizza-price span {
+            font-size: 13px;
+            font-weight: 400;
+            color: var(--text-light);
+        }
+
+        .add-btn {
+            width: 44px;
+            height: 44px;
+            border: none;
+            border-radius: 50%;
+            background: var(--primary);
+            color: white;
+            font-size: 24px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: var(--transition);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .add-btn:hover {
+            background: var(--primary-dark);
+            box-shadow: var(--shadow-md);
+        }
+
+        .add-btn:active {
+            transform: scale(0.9);
+        }
+
+        .add-btn.added {
+            background: var(--success);
+        }
+
+        /* Quantity Controls */
+        .quantity-controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: var(--background);
+            border-radius: 25px;
+            padding: 4px;
+        }
+
+        .qty-btn {
+            width: 36px;
+            height: 36px;
+            border: none;
+            border-radius: 50%;
+            background: var(--surface);
+            color: var(--text-primary);
+            font-size: 18px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: var(--transition);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .qty-btn:active {
+            transform: scale(0.9);
+        }
+
+        .qty-btn.minus {
+            color: var(--primary);
+        }
+
+        .qty-value {
+            font-size: 15px;
+            font-weight: 600;
+            min-width: 24px;
+            text-align: center;
+        }
+
+        /* Cart Bar */
+        .cart-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: var(--surface);
+            padding: 12px 16px;
+            padding-bottom: calc(12px + var(--safe-bottom));
+            box-shadow: 0 -4px 20px rgba(0,0,0,0.1);
+            z-index: 100;
+            transform: translateY(100%);
+            transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .cart-bar.visible {
+            transform: translateY(0);
+        }
+
+        .cart-content {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .cart-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .cart-count {
+            width: 44px;
+            height: 44px;
+            background: var(--primary);
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 700;
+            font-size: 16px;
+        }
+
+        .cart-details h3 {
+            font-size: 14px;
+            color: var(--text-secondary);
+            font-weight: 400;
+        }
+
+        .cart-total {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .checkout-btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 14px 28px;
+            border-radius: var(--radius-lg);
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .checkout-btn:active {
+            transform: scale(0.95);
+            background: var(--primary-dark);
+        }
+
+        /* Cart Modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 200;
+            opacity: 0;
+            visibility: hidden;
+            transition: var(--transition);
+        }
+
+        .modal-overlay.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .cart-modal {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: var(--surface);
+            border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+            max-height: 80vh;
+            z-index: 201;
+            transform: translateY(100%);
+            transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .modal-overlay.visible .cart-modal {
+            transform: translateY(0);
+        }
+
+        .modal-header {
+            padding: 20px 16px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        .modal-title {
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .close-btn {
+            width: 36px;
+            height: 36px;
+            border: none;
+            border-radius: 50%;
+            background: var(--background);
+            font-size: 20px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+        }
+
+        .cart-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .cart-item:last-child {
+            border-bottom: none;
+        }
+
+        .cart-item-image {
+            width: 60px;
+            height: 60px;
+            border-radius: var(--radius-md);
+            object-fit: cover;
+        }
+
+        .cart-item-info {
+            flex: 1;
+        }
+
+        .cart-item-name {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .cart-item-price {
+            font-size: 14px;
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        .cart-item-qty {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .modal-footer {
+            padding: 16px;
+            border-top: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+
+        .modal-total {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .modal-total-label {
+            font-size: 16px;
+            color: var(--text-secondary);
+        }
+
+        .modal-total-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .order-btn {
+            width: 100%;
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 16px;
+            border-radius: var(--radius-lg);
+            font-size: 17px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+
+        .order-btn:active {
+            background: var(--primary-dark);
+        }
+
+        .empty-cart {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-secondary);
+        }
+
+        .empty-cart-icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+        }
+
+        /* Notification Toast */
+        .toast {
+            position: fixed;
+            bottom: 100px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: var(--text-primary);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 25px;
+            font-size: 14px;
+            font-weight: 500;
+            z-index: 300;
+            opacity: 0;
+            transition: all 0.3s ease;
+        }
+
+        .toast.visible {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+        }
+
+        /* Loading Animation */
+        .loading {
+            display: flex;
+            justify-content: center;
+            padding: 40px;
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--border);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Rating Badge */
+        .rating-badge {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(255,255,255,0.95);
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .rating-star {
+            color: var(--secondary);
+        }
+
+        /* Popular Badge */
+        .popular-badge {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: var(--secondary);
+            color: var(--text-primary);
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 24px 16px;
+            color: var(--text-light);
+            font-size: 13px;
+        }
+
+        /* Pull to refresh indicator */
+        .refresh-indicator {
+            position: fixed;
+            top: calc(140px + env(safe-area-inset-top, 0px));
+            left: 0;
+            right: 0;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            font-size: 13px;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .refresh-indicator.visible {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <a href="#" class="logo">
+            <span class="logo-icon">🍕</span>
+            <span class="logo-text">PizzaVibe</span>
+        </a>
+        <div class="location">
+            <svg class="location-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+            </svg>
+            <span>ул. Пиццерийная, 15</span>
+        </div>
+    </header>
+
+    <!-- Categories -->
+    <nav class="categories">
+        <div class="categories-scroll" id="categories">
+            <button class="category-btn active" data-category="all">
+                <span class="category-icon">🍽️</span>Все
+            </button>
+            <button class="category-btn" data-category="popular">
+                <span class="category-icon">🔥</span>Популярные
+            </button>
+            <button class="category-btn" data-category="meat">
+                <span class="category-icon">🥩</span>Мясные
+            </button>
+            <button class="category-btn" data-category="vegetarian">
+                <span class="category-icon">🥬</span>Вегетарианские
+            </button>
+            <button class="category-btn" data-category="spicy">
+                <span class="category-icon">🌶️</span>Острые
+            </button>
+            <button class="category-btn" data-category="seafood">
+                <span class="category-icon">🦐</span>Морепродукты
+            </button>
+            <button class="category-btn" data-category="combo">
+                <span class="category-icon">🎁</span>Комбо
+            </button>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main">
+        <!-- Promo Banner -->
+        <div class="promo-banner">
+            <div class="promo-title">🍕 2 пиццы по цене 1!</div>
+            <div class="promo-subtitle">При заказе любых двух пицц — скидка 50% на вторую</div>
+            <a href="#" class="promo-btn" onclick="filterCategory('popular'); return false;">Заказать</a>
+        </div>
+
+        <!-- Section Title -->
+        <h2 class="section-title" id="section-title">Все пиццы</h2>
+
+        <!-- Pizza Grid -->
+        <div class="pizza-grid" id="pizza-grid">
+            <!-- Pizzas will be rendered here -->
+        </div>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>© 2024 PizzaVibe. Быстрая доставка пиццы</p>
+            <p style="margin-top: 8px;">Среднее время доставки: 25-35 мин</p>
+        </footer>
+    </main>
+
+    <!-- Cart Bar -->
+    <div class="cart-bar" id="cart-bar">
+        <div class="cart-content">
+            <div class="cart-info">
+                <div class="cart-count" id="cart-count">0</div>
+                <div class="cart-details">
+                    <h3>товаров в корзине</h3>
+                    <div class="cart-total" id="cart-total">0 ₽</div>
+                </div>
+            </div>
+            <button class="checkout-btn" onclick="openCart()">Оформить</button>
+        </div>
+    </div>
+
+    <!-- Cart Modal -->
+    <div class="modal-overlay" id="modal-overlay" onclick="closeCart()"></div>
+    <div class="cart-modal" id="cart-modal">
+        <div class="modal-header">
+            <h2 class="modal-title">Корзина</h2>
+            <button class="close-btn" onclick="closeCart()">✕</button>
+        </div>
+        <div class="modal-body" id="modal-body">
+            <!-- Cart items will be rendered here -->
+        </div>
+        <div class="modal-footer">
+            <div class="modal-total">
+                <span class="modal-total-label">Итого к оплате:</span>
+                <span class="modal-total-value" id="modal-total">0 ₽</span>
+            </div>
+            <button class="order-btn" onclick="placeOrder()">Заказать</button>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast">Добавлено в корзину!</div>
+
+    <script>
+        // Pizza Data
+        const pizzas = [
+            {
+                id: 1,
+                name: "Пепперони Фест",
+                category: "popular",
+                price: 590,
+                weight: "450г",
+                description: "Двойная порция пепперони, моцарелла, томатный соус",
+                image: "https://images.unsplash.com/photo-1628840042765-356cda07504e?w=400&h=400&fit=crop",
+                rating: 4.8,
+                popular: true
+            },
+            {
+                id: 2,
+                name: "Четыре Сыра",
+                category: "vegetarian",
+                price: 620,
+                weight: "480г",
+                description: "Моцарелла, пармезан, чеддер, дорблю, орегано",
+                image: "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=400&h=400&fit=crop",
+                rating: 4.9,
+                popular: true
+            },
+            {
+                id: 3,
+                name: "Мясное Ассорти",
+                category: "meat",
+                price: 750,
+                weight: "520г",
+                description: "Ветчина, салями, пепперони, бекон, курица",
+                image: "https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&h=400&fit=crop",
+                rating: 4.7,
+                popular: false
+            },
+            {
+                id: 4,
+                name: "Острая Тарантула",
+                category: "spicy",
+                price: 680,
+                weight: "460г",
+                description: "Острая салями, халапеньо, перец чили, лук",
+                image: "https://images.unsplash.com/photo-1595854341625-f71831d39e71?w=400&h=400&fit=crop",
+                rating: 4.6,
+                popular: true
+            },
+            {
+                id: 5,
+                name: "Морская Дель",
+                category: "seafood",
+                price: 820,
+                weight: "490г",
+                description: "Лосось, креветки, мидии, кальмар, оливки",
+                image: "https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?w=400&h=400&fit=crop",
+                rating: 4.5,
+                popular: false
+            },
+            {
+                id: 6,
+                name: "Гавайская Классика",
+                category: "popular",
+                price: 540,
+                weight: "440г",
+                description: "Ветчина, ананасы, моцарелла, соус барбекю",
+                image: "https://images.unsplash.com/photo-1604382354936-07c5d9983bd3?w=400&h=400&fit=crop",
+                rating: 4.4,
+                popular: true
+            },
+            {
+                id: 7,
+                name: "Овощной Сад",
+                category: "vegetarian",
+                price: 480,
+                weight: "420г",
+                description: "Томаты, болгарский перец, грибы, оливки, лук",
+                image: "https://images.unsplash.com/photo-1511689660979-10d2b1aada49?w=400&h=400&fit=crop",
+                rating: 4.3,
+                popular: false
+            },
+            {
+                id: 8,
+                name: "Барбекю Микс",
+                category: "meat",
+                price: 710,
+                weight: "500г",
+                description: "Курица, бекон, свинина, соус барбекю, лук фри",
+                image: "https://images.unsplash.com/photo-1594007654729-407eedc4be65?w=400&h=400&fit=crop",
+                rating: 4.7,
+                popular: false
+            },
+            {
+                id: 9,
+                name: "Комбо Для Компании",
+                category: "combo",
+                price: 1490,
+                weight: "1.2кг",
+                description: "2 большие пиццы + напиток 1.5л + чесночные палочки",
+                image: "https://images.unsplash.com/photo-1585238342024-78d387f4a707?w=400&h=400&fit=crop",
+                rating: 4.9,
+                popular: true
+            },
+            {
+                id: 10,
+                name: "Супер Острая",
+                category: "spicy",
+                price: 640,
+                weight: "450г",
+                description: "Острая колбаса, табаско, халапеньо, лук, чеснок",
+                image: "https://images.unsplash.com/photo-1628840042765-356cda07504e?w=400&h=400&fit=crop",
+                rating: 4.5,
+                popular: false
+            }
+        ];
+
+        // Cart State
+        let cart = {};
+        let currentCategory = 'all';
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            renderPizzas();
+            setupCategoryFilters();
+        });
+
+        // Render Pizzas
+        function renderPizzas() {
+            const grid = document.getElementById('pizza-grid');
+            const filtered = currentCategory === 'all'
+                ? pizzas
+                : currentCategory === 'popular'
+                    ? pizzas.filter(p => p.popular)
+                    : pizzas.filter(p => p.category === currentCategory);
+
+            grid.innerHTML = filtered.map(pizza => `
+                <article class="pizza-card" data-id="${pizza.id}">
+                    <div style="position: relative;">
+                        <img
+                            src="${pizza.image}"
+                            alt="${pizza.name}"
+                            class="pizza-image"
+                            loading="lazy"
+                            onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 400 400%22><rect fill=%22%23f0f0f0%22 width=%22400%22 height=%22400%22/><text x=%22200%22 y=%22200%22 text-anchor=%22middle%22 dominant-baseline=%22middle%22 fill=%22%23aaa%22 font-size=%2248%22>🍕</text></svg>'"
+                        >
+                        ${pizza.rating ? `
+                            <div class="rating-badge">
+                                <span class="rating-star">★</span>
+                                ${pizza.rating}
+                            </div>
+                        ` : ''}
+                        ${pizza.popular ? '<span class="popular-badge">Хит</span>' : ''}
+                    </div>
+                    <div class="pizza-info">
+                        <div class="pizza-header">
+                            <h3 class="pizza-name">${pizza.name}</h3>
+                            <span class="pizza-weight">${pizza.weight}</span>
+                        </div>
+                        <p class="pizza-description">${pizza.description}</p>
+                        <div class="pizza-footer">
+                            <div class="pizza-price">${pizza.price} <span>₽</span></div>
+                            ${getQuantityControl(pizza.id)}
+                        </div>
+                    </div>
+                </article>
+            `).join('');
+        }
+
+        // Get Quantity Control HTML
+        function getQuantityControl(pizzaId) {
+            const qty = cart[pizzaId] || 0;
+            if (qty === 0) {
+                return `<button class="add-btn" onclick="addToCart(${pizzaId})">+</button>`;
+            }
+            return `
+                <div class="quantity-controls">
+                    <button class="qty-btn minus" onclick="updateQuantity(${pizzaId}, -1)">−</button>
+                    <span class="qty-value">${qty}</span>
+                    <button class="qty-btn" onclick="updateQuantity(${pizzaId}, 1)">+</button>
+                </div>
+            `;
+        }
+
+        // Add to Cart
+        function addToCart(pizzaId) {
+            cart[pizzaId] = (cart[pizzaId] || 0) + 1;
+            updateUI();
+            showToast('Добавлено в корзину!');
+        }
+
+        // Update Quantity
+        function updateQuantity(pizzaId, change) {
+            cart[pizzaId] = (cart[pizzaId] || 0) + change;
+            if (cart[pizzaId] <= 0) {
+                delete cart[pizzaId];
+            }
+            updateUI();
+        }
+
+        // Update UI
+        function updateUI() {
+            renderPizzas();
+            updateCartBar();
+            updateCartModal();
+        }
+
+        // Update Cart Bar
+        function updateCartBar() {
+            const cartBar = document.getElementById('cart-bar');
+            const cartCount = document.getElementById('cart-count');
+            const cartTotal = document.getElementById('cart-total');
+
+            const totalItems = Object.values(cart).reduce((a, b) => a + b, 0);
+            const totalPrice = Object.entries(cart).reduce((sum, [id, qty]) => {
+                const pizza = pizzas.find(p => p.id === parseInt(id));
+                return sum + (pizza ? pizza.price * qty : 0);
+            }, 0);
+
+            cartCount.textContent = totalItems;
+            cartTotal.textContent = formatPrice(totalPrice);
+
+            if (totalItems > 0) {
+                cartBar.classList.add('visible');
+            } else {
+                cartBar.classList.remove('visible');
+            }
+        }
+
+        // Update Cart Modal
+        function updateCartModal() {
+            const modalBody = document.getElementById('modal-body');
+            const modalTotal = document.getElementById('modal-total');
+
+            const cartItems = Object.entries(cart).map(([id, qty]) => {
+                const pizza = pizzas.find(p => p.id === parseInt(id));
+                if (!pizza) return '';
+                return `
+                    <div class="cart-item">
+                        <img src="${pizza.image}" alt="${pizza.name}" class="cart-item-image" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 60 60%22><rect fill=%22%23f0f0f0%22 width=%2260%22 height=%2260%22/><text x=%2230%22 y=%2235%22 text-anchor=%22middle%22 dominant-baseline=%22middle%22 fill=%22%23aaa%22 font-size=%2224%22>🍕</text></svg>'">
+                        <div class="cart-item-info">
+                            <div class="cart-item-name">${pizza.name}</div>
+                            <div class="cart-item-price">${formatPrice(pizza.price)}</div>
+                        </div>
+                        <div class="cart-item-qty">
+                            <button class="qty-btn minus" onclick="updateQuantity(${pizza.id}, -1); updateCartModal();">−</button>
+                            <span class="qty-value">${qty}</span>
+                            <button class="qty-btn" onclick="updateQuantity(${pizza.id}, 1); updateCartModal();">+</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            const totalPrice = Object.entries(cart).reduce((sum, [id, qty]) => {
+                const pizza = pizzas.find(p => p.id === parseInt(id));
+                return sum + (pizza ? pizza.price * qty : 0);
+            }, 0);
+
+            if (cartItems.length === 0) {
+                modalBody.innerHTML = `
+                    <div class="empty-cart">
+                        <div class="empty-cart-icon">🛒</div>
+                        <p>Корзина пуста</p>
+                    </div>
+                `;
+            } else {
+                modalBody.innerHTML = cartItems;
+            }
+
+            modalTotal.textContent = formatPrice(totalPrice);
+        }
+
+        // Open Cart Modal
+        function openCart() {
+            document.getElementById('modal-overlay').classList.add('visible');
+            document.body.style.overflow = 'hidden';
+        }
+
+        // Close Cart Modal
+        function closeCart() {
+            document.getElementById('modal-overlay').classList.remove('visible');
+            document.body.style.overflow = '';
+        }
+
+        // Place Order
+        function placeOrder() {
+            const totalItems = Object.values(cart).reduce((a, b) => a + b, 0);
+            if (totalItems === 0) {
+                showToast('Корзина пуста!');
+                return;
+            }
+            showToast('Заказ оформлен! 🍕');
+            cart = {};
+            updateUI();
+            closeCart();
+        }
+
+        // Setup Category Filters
+        function setupCategoryFilters() {
+            const buttons = document.querySelectorAll('.category-btn');
+            buttons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    buttons.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    currentCategory = btn.dataset.category;
+
+                    // Update section title
+                    const titles = {
+                        'all': 'Все пиццы',
+                        'popular': 'Популярные',
+                        'meat': 'Мясные пиццы',
+                        'vegetarian': 'Вегетарианские',
+                        'spicy': 'Острые пиццы',
+                        'seafood': 'Морепродукты',
+                        'combo': 'Комбо наборы'
+                    };
+                    document.getElementById('section-title').textContent = titles[currentCategory];
+
+                    renderPizzas();
+                });
+            });
+        }
+
+        // Filter by category from promo
+        function filterCategory(category) {
+            const buttons = document.querySelectorAll('.category-btn');
+            buttons.forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.category === category);
+            });
+            currentCategory = category;
+
+            const titles = {
+                'all': 'Все пиццы',
+                'popular': 'Популярные',
+                'meat': 'Мясные пиццы',
+                'vegetarian': 'Вегетарианские',
+                'spicy': 'Острые пиццы',
+                'seafood': 'Морепродукты',
+                'combo': 'Комбо наборы'
+            };
+            document.getElementById('section-title').textContent = titles[currentCategory];
+
+            renderPizzas();
+
+            // Scroll to main content
+            document.querySelector('.main').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // Show Toast
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.classList.add('visible');
+            setTimeout(() => toast.classList.remove('visible'), 2000);
+        }
+
+        // Format Price
+        function formatPrice(price) {
+            return price.toLocaleString('ru-RU') + ' ₽';
+        }
+    </script>
+</body>
+</html>

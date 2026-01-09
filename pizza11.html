@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Дровяная Пицца | Neo-Brutalism</title>
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;700&family=Roboto:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #121212;
+            --card-bg: #1E1E1E;
+            --text-primary: #FFFFFF;
+            --text-secondary: #B0B0B0;
+            --accent: #FF5A1F; /* Fire Orange */
+            --border-color: #333333;
+            --highlight: #2A2A2A;
+            --spacing: 16px;
+            --border-width: 2px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: 'Roboto', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            line-height: 1.5;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+        }
+
+        /* Header */
+        header {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background-color: rgba(18, 18, 18, 0.95);
+            border-bottom: var(--border-width) solid var(--accent);
+            padding: 1rem var(--spacing);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            backdrop-filter: blur(10px);
+        }
+
+        .logo {
+            font-family: 'Oswald', sans-serif;
+            font-size: 1.8rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-primary);
+        }
+
+        .logo span {
+            color: var(--accent);
+        }
+
+        .cart-icon-wrapper {
+            position: relative;
+            cursor: pointer;
+            padding: 8px;
+            border: 2px solid var(--text-primary);
+            transition: all 0.3s ease;
+        }
+
+        .cart-icon-wrapper:hover {
+            background-color: var(--text-primary);
+        }
+        
+        .cart-icon-wrapper:hover .material-icons {
+            color: var(--bg-color);
+        }
+
+        .cart-icon-wrapper .material-icons {
+            font-size: 28px;
+            color: var(--text-primary);
+        }
+
+        .cart-badge {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            background-color: var(--accent);
+            color: white;
+            font-weight: bold;
+            font-size: 12px;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid var(--bg-color);
+            opacity: 0;
+            transform: scale(0);
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .cart-badge.active {
+            opacity: 1;
+            transform: scale(1);
+        }
+
+        /* Hero Section */
+        .hero {
+            padding: 2rem var(--spacing);
+            text-align: center;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .hero h1 {
+            font-family: 'Oswald', sans-serif;
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            line-height: 1.1;
+        }
+
+        .hero p {
+            color: var(--text-secondary);
+            font-size: 1rem;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        /* Catalog Grid */
+        .catalog {
+            padding: 2rem var(--spacing);
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        /* Product Card */
+        .card {
+            background-color: var(--card-bg);
+            border: var(--border-width) solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            transition: transform 0.2s, box-shadow 0.2s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card:hover {
+            transform: translateY(-4px);
+            border-color: var(--accent);
+            box-shadow: 4px 4px 0px rgba(255, 90, 31, 0.2);
+        }
+
+        .card-img-container {
+            width: 100%;
+            height: 220px;
+            overflow: hidden;
+            position: relative;
+            border-bottom: var(--border-width) solid var(--border-color);
+        }
+
+        .card-img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.5s ease;
+        }
+
+        .card:hover .card-img {
+            transform: scale(1.05);
+        }
+
+        .card-content {
+            padding: 1.25rem;
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1;
+        }
+
+        .card-title {
+            font-family: 'Oswald', sans-serif;
+            font-size: 1.4rem;
+            margin-bottom: 0.5rem;
+            color: var(--text-primary);
+        }
+
+        .card-desc {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-bottom: 1.5rem;
+            flex-grow: 1;
+        }
+
+        .card-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: auto;
+        }
+
+        .price {
+            font-family: 'Oswald', sans-serif;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .add-btn {
+            background-color: transparent;
+            color: var(--text-primary);
+            border: 2px solid var(--text-primary);
+            padding: 0.5rem 1rem;
+            font-family: 'Oswald', sans-serif;
+            font-size: 1rem;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .add-btn:hover {
+            background-color: var(--accent);
+            border-color: var(--accent);
+            color: white;
+        }
+
+        .add-btn:active {
+            transform: scale(0.95);
+        }
+
+        /* Cart Sidebar */
+        .cart-sidebar {
+            position: fixed;
+            top: 0;
+            right: 0;
+            width: 100%;
+            max-width: 400px;
+            height: 100%;
+            background-color: var(--card-bg);
+            border-left: var(--border-width) solid var(--accent);
+            z-index: 1000;
+            transform: translateX(100%);
+            transition: transform 0.4s cubic-bezier(0.25, 1, 0.5, 1);
+            display: flex;
+            flex-direction: column;
+            box-shadow: -5px 0 20px rgba(0,0,0,0.5);
+        }
+
+        .cart-sidebar.open {
+            transform: translateX(0);
+        }
+
+        .cart-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .cart-header h2 {
+            font-family: 'Oswald', sans-serif;
+            font-size: 1.5rem;
+        }
+
+        .close-cart {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 5px;
+        }
+
+        .close-cart:hover {
+            color: var(--accent);
+        }
+
+        .cart-items {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 1rem;
+        }
+
+        .cart-item {
+            display: flex;
+            align-items: center;
+            padding: 1rem;
+            background-color: var(--highlight);
+            border: 1px solid var(--border-color);
+            margin-bottom: 1rem;
+        }
+
+        .cart-item-img {
+            width: 60px;
+            height: 60px;
+            object-fit: cover;
+            border-radius: 4px;
+            margin-right: 1rem;
+        }
+
+        .cart-item-info {
+            flex-grow: 1;
+        }
+
+        .cart-item-title {
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+
+        .cart-item-price {
+            color: var(--accent);
+            font-weight: bold;
+        }
+
+        .cart-item-remove {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 5px;
+        }
+
+        .cart-item-remove:hover {
+            color: #ff4444;
+        }
+
+        .cart-footer {
+            padding: 1.5rem;
+            border-top: 1px solid var(--border-color);
+            background-color: var(--highlight);
+        }
+
+        .cart-total {
+            display: flex;
+            justify-content: space-between;
+            font-family: 'Oswald', sans-serif;
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .checkout-btn {
+            width: 100%;
+            background-color: var(--accent);
+            color: white;
+            border: none;
+            padding: 1rem;
+            font-family: 'Oswald', sans-serif;
+            font-size: 1.2rem;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .checkout-btn:hover {
+            background-color: #e04e18;
+        }
+
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.7);
+            z-index: 900;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.4s;
+        }
+
+        .overlay.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+
+        /* Flying Animation Element */
+        .flying-pizza {
+            position: fixed;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            object-fit: cover;
+            z-index: 2000;
+            pointer-events: none;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+            transition: all 0.8s cubic-bezier(0.19, 1, 0.22, 1);
+            opacity: 1;
+        }
+
+        /* Empty State */
+        .empty-cart {
+            text-align: center;
+            color: var(--text-secondary);
+            margin-top: 3rem;
+        }
+
+        .empty-cart .material-icons {
+            font-size: 48px;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+
+        @media (max-width: 600px) {
+            .catalog {
+                grid-template-columns: 1fr;
+            }
+            
+            .hero h1 {
+                font-size: 2rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="logo">ДРОВЯНАЯ <span>ПИЦЦА</span></div>
+        <div class="cart-icon-wrapper" id="cartBtn">
+            <i class="material-icons">shopping_basket</i>
+            <div class="cart-badge" id="cartBadge">0</div>
+        </div>
+    </header>
+
+    <section class="hero">
+        <h1>ВКУС НАСТОЯЩЕГО ОГНЯ</h1>
+        <p>Строгая форма, безумный вкус. Пицца, приготовленная на дровах в неаполитанской традиции.</p>
+    </section>
+
+    <main class="catalog" id="catalog">
+        <!-- Cards will be injected by JS -->
+    </main>
+
+    <!-- Overlay & Cart Sidebar -->
+    <div class="overlay" id="overlay"></div>
+    <div class="cart-sidebar" id="cartSidebar">
+        <div class="cart-header">
+            <h2>КОРЗИНА</h2>
+            <button class="close-cart" id="closeCartBtn">
+                <i class="material-icons">close</i>
+            </button>
+        </div>
+        <div class="cart-items" id="cartItems">
+            <div class="empty-cart">
+                <i class="material-icons">pizza_maker</i>
+                <p>Пока пусто. Добавьте вкусного!</p>
+            </div>
+        </div>
+        <div class="cart-footer">
+            <div class="cart-total">
+                <span>ИТОГО:</span>
+                <span id="cartTotal">0 ₽</span>
+            </div>
+            <button class="checkout-btn">ОФОРМИТЬ ЗАКАЗ</button>
+        </div>
+    </div>
+
+    <script>
+        // Product Data
+        const products = [
+            {
+                id: 1,
+                name: "Маргарита Дровяная",
+                desc: "Томаты Сан-Марцано, моцарелла буфала, свежий базилик, оливковое масло.",
+                price: 550,
+                img: "https://sfile.chatglm.cn/images-ppt/496dcd54977e.jpg"
+            },
+            {
+                id: 2,
+                name: "Диавола",
+                desc: "Салами пиканте, чили, моцарелла, томатный соус, мед для кисло-сладкого акцента.",
+                price: 680,
+                img: "https://sfile.chatglm.cn/images-ppt/d1fe45434208.jpg"
+            },
+            {
+                id: 3,
+                name: "Четыре Сыра",
+                desc: "Горгонзола, моцарелла, пармезан, чеддер на сливочной основе.",
+                price: 620,
+                img: "https://sfile.chatglm.cn/images-ppt/537b9a59b6bf.jpg"
+            },
+            {
+                id: 4,
+                name: "Пепперони Классик",
+                desc: "Хрустящее пепперони, моцарелла, томатный соус, щепотка орегано.",
+                price: 590,
+                img: "https://sfile.chatglm.cn/images-ppt/b236763f6894.jpg"
+            },
+            {
+                id: 5,
+                name: "Тоскана",
+                desc: "Ветчина, шампиньоны, артишоки, моцарелла, черные оливки.",
+                price: 650,
+                img: "https://sfile.chatglm.cn/images-ppt/662e23f15c6c.jpg"
+            },
+            {
+                id: 6,
+                name: "Мясной Деликатес",
+                desc: "Копченая курица, бекон, ветчина, колбаски, моцарелла, барбекю соус.",
+                price: 750,
+                img: "https://sfile.chatglm.cn/images-ppt/e741700733bf.jpg"
+            }
+        ];
+
+        // State
+        let cart = [];
+
+        // DOM Elements
+        const catalog = document.getElementById('catalog');
+        const cartBtn = document.getElementById('cartBtn');
+        const cartBadge = document.getElementById('cartBadge');
+        const cartSidebar = document.getElementById('cartSidebar');
+        const closeCartBtn = document.getElementById('closeCartBtn');
+        const overlay = document.getElementById('overlay');
+        const cartItemsContainer = document.getElementById('cartItems');
+        const cartTotalEl = document.getElementById('cartTotal');
+
+        // Initialize Catalog
+        function initCatalog() {
+            catalog.innerHTML = products.map(product => `
+                <article class="card">
+                    <div class="card-img-container">
+                        <img src="${product.img}" alt="${product.name}" class="card-img" id="img-${product.id}">
+                    </div>
+                    <div class="card-content">
+                        <h3 class="card-title">${product.name}</h3>
+                        <p class="card-desc">${product.desc}</p>
+                        <div class="card-footer">
+                            <span class="price">${product.price} ₽</span>
+                            <button class="add-btn" onclick="addToCart(${product.id}, this)">
+                                <i class="material-icons">add</i> В корзину
+                            </button>
+                        </div>
+                    </div>
+                </article>
+            `).join('');
+        }
+
+        // Add to Cart Function
+        window.addToCart = function(id, btnElement) {
+            const product = products.find(p => p.id === id);
+            cart.push(product);
+            
+            // Trigger Animation
+            animatePizzaFly(id, btnElement);
+
+            // Update UI
+            updateCartUI();
+        };
+
+        // Animation Logic
+        function animatePizzaFly(productId, btnElement) {
+            const productImg = document.getElementById(`img-${productId}`);
+            const cartIcon = document.getElementById('cartBtn');
+            
+            // Clone Image
+            const clone = productImg.cloneNode();
+            clone.classList.add('flying-pizza');
+            
+            // Get Positions
+            const imgRect = productImg.getBoundingClientRect();
+            const btnRect = btnElement.getBoundingClientRect();
+            const cartRect = cartIcon.getBoundingClientRect();
+            
+            // Start Position (Center of Button)
+            const startX = btnRect.left + btnRect.width / 2 - 25;
+            const startY = btnRect.top + btnRect.height / 2 - 25;
+            
+            // End Position (Center of Cart Icon)
+            const endX = cartRect.left + cartRect.width / 2 - 25;
+            const endY = cartRect.top + cartRect.height / 2 - 25;
+            
+            clone.style.left = `${startX}px`;
+            clone.style.top = `${startY}px`;
+            clone.style.width = '50px';
+            clone.style.height = '50px';
+            
+            document.body.appendChild(clone);
+            
+            // Force Reflow
+            void clone.offsetWidth;
+            
+            // Animate
+            clone.style.left = `${endX}px`;
+            clone.style.top = `${endY}px`;
+            clone.style.width = '20px';
+            clone.style.height = '20px';
+            clone.style.opacity = '0.5';
+            clone.style.transform = 'rotate(720deg)'; // Add spin
+            
+            // Cleanup
+            setTimeout(() => {
+                clone.remove();
+                
+                // Bounce effect on Cart Icon
+                cartIcon.style.transform = 'scale(1.3)';
+                setTimeout(() => cartIcon.style.transform = 'scale(1)', 150);
+                
+            }, 800);
+        }
+
+        // Update Cart UI
+        function updateCartUI() {
+            // Update Badge
+            cartBadge.textContent = cart.length;
+            if (cart.length > 0) {
+                cartBadge.classList.add('active');
+            } else {
+                cartBadge.classList.remove('active');
+            }
+
+            // Calculate Total
+            const total = cart.reduce((sum, item) => sum + item.price, 0);
+            cartTotalEl.textContent = `${total} ₽`;
+
+            // Render Items
+            if (cart.length === 0) {
+                cartItemsContainer.innerHTML = `
+                    <div class="empty-cart">
+                        <i class="material-icons">pizza_maker</i>
+                        <p>Пока пусто. Добавьте вкусного!</p>
+                    </div>
+                `;
+            } else {
+                cartItemsContainer.innerHTML = cart.map((item, index) => `
+                    <div class="cart-item">
+                        <img src="${item.img}" alt="${item.name}" class="cart-item-img">
+                        <div class="cart-item-info">
+                            <div class="cart-item-title">${item.name}</div>
+                            <div class="cart-item-price">${item.price} ₽</div>
+                        </div>
+                        <button class="cart-item-remove" onclick="removeFromCart(${index})">
+                            <i class="material-icons">delete_outline</i>
+                        </button>
+                    </div>
+                `).join('');
+            }
+        }
+
+        // Remove from Cart
+        window.removeFromCart = function(index) {
+            cart.splice(index, 1);
+            updateCartUI();
+        }
+
+        // Toggle Sidebar
+        function toggleCart() {
+            cartSidebar.classList.toggle('open');
+            overlay.classList.toggle('active');
+        }
+
+        // Event Listeners
+        cartBtn.addEventListener('click', toggleCart);
+        closeCartBtn.addEventListener('click', toggleCart);
+        overlay.addEventListener('click', toggleCart);
+
+        // Init
+        initCatalog();
+
+    </script>
+</body>
+</html>

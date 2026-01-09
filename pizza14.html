@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SUMI PIZZA | Wood Fired & Asian Soul</title>
+    <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;500;700&family=Noto+Sans:wght@300;400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0e0e0e;
+            --card-bg: #161616;
+            --text-main: #e0e0e0;
+            --text-muted: #888888;
+            --accent-red: #cd2b2b; /* Киноварь */
+            --accent-gold: #c5a059; /* Тусклое золото */
+            --border-color: #2a2a2a;
+            --font-head: 'Oswald', sans-serif;
+            --font-body: 'Noto Sans', sans-serif;
+            --transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: var(--font-body);
+            overflow-x: hidden;
+            line-height: 1.6;
+            /* Текстура шума для "тактильности" */
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.05'/%3E%3C/svg%3E");
+        }
+
+        /* --- LAYOUT GRID --- */
+        .container {
+            display: grid;
+            grid-template-columns: 80px 1fr 350px;
+            min-height: 100vh;
+        }
+
+        /* --- LEFT: VERTICAL NAV (Asian Vibe) --- */
+        .sidebar-nav {
+            background: #000;
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 40px 0;
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            z-index: 100;
+        }
+        .logo-vertical {
+            writing-mode: vertical-rl;
+            text-orientation: mixed;
+            font-family: var(--font-head);
+            font-weight: 700;
+            font-size: 2rem;
+            letter-spacing: 0.3em;
+            color: var(--text-main);
+            text-transform: uppercase;
+        }
+        .logo-stamp {
+            width: 40px;
+            height: 40px;
+            background: var(--accent-red);
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.2rem;
+            color: #fff;
+            border-radius: 4px;
+            box-shadow: 0 0 15px rgba(205, 43, 43, 0.4);
+        }
+
+        /* --- MIDDLE: CONTENT --- */
+        .main-content {
+            padding: 40px 60px;
+            border-right: 1px solid var(--border-color);
+        }
+
+        header {
+            margin-bottom: 60px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+        }
+        
+        h1 {
+            font-family: var(--font-head);
+            font-size: 4rem;
+            text-transform: uppercase;
+            line-height: 0.9;
+            letter-spacing: -1px;
+        }
+        h1 span { color: var(--accent-red); }
+        
+        .subtitle {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            max-width: 400px;
+            margin-top: 20px;
+            border-left: 2px solid var(--accent-gold);
+            padding-left: 15px;
+        }
+
+        /* --- PRODUCT GRID --- */
+        .menu-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 40px;
+            margin-bottom: 80px;
+        }
+
+        .product-card {
+            background: transparent;
+            position: relative;
+            group: cursor-pointer;
+            transition: var(--transition);
+        }
+
+        .product-card:hover .img-wrapper img {
+            transform: scale(1.05) rotate(2deg);
+            opacity: 0.8;
+        }
+
+        .img-wrapper {
+            width: 100%;
+            aspect-ratio: 1/1;
+            background: #111;
+            overflow: hidden;
+            border-radius: 2px;
+            margin-bottom: 20px;
+            position: relative;
+        }
+
+        .img-wrapper img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: var(--transition);
+            filter: contrast(1.1) saturate(1.1);
+        }
+
+        .badges {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .badge {
+            font-size: 0.7rem;
+            padding: 4px 8px;
+            text-transform: uppercase;
+            font-weight: 700;
+            background: rgba(0,0,0,0.8);
+            color: #fff;
+            backdrop-filter: blur(4px);
+            border-left: 2px solid var(--accent-gold);
+            letter-spacing: 1px;
+        }
+        .badge.hot { border-color: var(--accent-red); color: var(--accent-red); }
+
+        .product-info h3 {
+            font-family: var(--font-head);
+            font-size: 1.4rem;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+        }
+
+        .product-desc {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 15px;
+            min-height: 40px;
+        }
+
+        .price-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-top: 1px solid var(--border-color);
+            padding-top: 15px;
+        }
+
+        .price {
+            font-family: var(--font-head);
+            font-size: 1.2rem;
+            color: var(--accent-gold);
+        }
+
+        .btn-add {
+            background: transparent;
+            border: 1px solid var(--text-muted);
+            color: var(--text-main);
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: var(--transition);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .btn-add:hover {
+            border-color: var(--accent-red);
+            background: var(--accent-red);
+            color: #fff;
+        }
+
+        /* --- RIGHT: CART & MAP (Sticky) --- */
+        .sidebar-right {
+            background: #111;
+            height: 100vh;
+            position: sticky;
+            top: 0;
+            display: flex;
+            flex-direction: column;
+            padding: 30px;
+        }
+
+        .cart-title {
+            font-family: var(--font-head);
+            font-size: 1.5rem;
+            text-transform: uppercase;
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+        }
+        .cart-title span { color: var(--accent-red); }
+
+        .cart-items {
+            flex-grow: 1;
+            overflow-y: auto;
+            margin-bottom: 20px;
+        }
+
+        .cart-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px dashed var(--border-color);
+            animation: fadeIn 0.3s ease;
+        }
+
+        .cart-item-info h4 {
+            font-size: 0.9rem;
+            margin-bottom: 5px;
+        }
+        .cart-item-info p {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        .cart-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .qty-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 1.2rem;
+        }
+        .qty-btn:hover { color: #fff; }
+
+        .cart-total {
+            margin-top: auto;
+            border-top: 1px solid var(--border-color);
+            padding-top: 20px;
+        }
+        .total-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 1.2rem;
+            font-family: var(--font-head);
+            margin-bottom: 20px;
+        }
+
+        .checkout-btn {
+            width: 100%;
+            padding: 15px;
+            background: var(--accent-red);
+            color: white;
+            border: none;
+            font-family: var(--font-head);
+            font-size: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        .checkout-btn:hover {
+            background: #b01b1b;
+            box-shadow: 0 5px 20px rgba(205, 43, 43, 0.3);
+        }
+
+        /* --- MAP SECTION (In Sidebar for Layout uniqueness) --- */
+        .mini-map {
+            margin-top: 30px;
+            height: 150px;
+            background: #222;
+            width: 100%;
+            position: relative;
+            overflow: hidden;
+            filter: grayscale(100%) invert(90%);
+        }
+        .mini-map iframe {
+            width: 100%;
+            height: 100%;
+            border: 0;
+            opacity: 0.6;
+        }
+
+        /* --- ANIMATIONS --- */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* --- RESPONSIVE --- */
+        @media (max-width: 1100px) {
+            .container {
+                grid-template-columns: 60px 1fr; 
+            }
+            .sidebar-right {
+                display: none; /* Hide default sidebar on tablet */
+            }
+            /* Show mobile cart toggler here if needed, for simplicity omitted in strict demo */
+            .mobile-cart-btn {
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                background: var(--accent-red);
+                padding: 15px;
+                border-radius: 50%;
+                z-index: 200;
+                display: block;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .container { display: block; }
+            .sidebar-nav {
+                height: 60px;
+                flex-direction: row;
+                padding: 0 20px;
+                position: relative;
+                width: 100%;
+                justify-content: center;
+            }
+            .logo-vertical {
+                writing-mode: horizontal-tb;
+                font-size: 1.5rem;
+                margin-left: 10px;
+            }
+            .logo-stamp { margin-bottom: 0; }
+            .main-content { padding: 20px; }
+            h1 { font-size: 2.5rem; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <!-- LEFT SIDEBAR: IDENTITY -->
+    <aside class="sidebar-nav">
+        <div class="logo-stamp">火</div>
+        <div class="logo-vertical">SUMI PIZZA</div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-content">
+        <header>
+            <div>
+                <h1>Wood<br><span>Fire</span> & Soul</h1>
+                <p class="subtitle">Аутентичная печь. Японская точность. Итальянские традиции. <br>Мы не готовим фастфуд, мы создаем опыт.</p>
+            </div>
+        </header>
+
+        <!-- CATALOG -->
+        <section class="menu-grid" id="menu-container">
+            <!-- Items will be injected by JS -->
+        </section>
+        
+    </main>
+
+    <!-- RIGHT SIDEBAR: CART & INFO -->
+    <aside class="sidebar-right">
+        <div class="cart-title">
+            Ваш Заказ <span>(<span id="cart-count">0</span>)</span>
+        </div>
+        
+        <div class="cart-items" id="cart-items">
+            <!-- Empty State -->
+            <p style="text-align:center; color: var(--text-muted); margin-top: 50px;">Корзина пуста<br>Добавьте огня</p>
+        </div>
+
+        <div class="cart-total">
+            <div class="total-row">
+                <span>Итого:</span>
+                <span id="cart-total">0 ₽</span>
+            </div>
+            <button class="checkout-btn" onclick="alert('Заказ отправлен на кухню.')">Оформить</button>
+        </div>
+
+        <div class="mini-map">
+            <iframe src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d2225.4384168962646!2d39.88448131589714!3d59.21980398162235!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x46add16c47849e0f%3A0x6295551f16521952!2z0JLQvtC70L7Qs9C00LA!5e0!3m2!1sru!2sru!4v1614264624123!5m2!1sru!2sru" allowfullscreen="" loading="lazy"></iframe>
+        </div>
+        <p style="font-size: 0.8rem; color: #555; text-align: center; margin-top: 10px;">Вологда, Центр. Работаем до 02:00</p>
+    </aside>
+</div>
+
+<script>
+    // --- DATA ---
+    const products = [
+        {
+            id: 1,
+            name: "Ronin Beef",
+            desc: "Мраморная говядина, трюфельное масло, шиитаке, черный перец.",
+            price: 1250,
+            image: "https://images.unsplash.com/photo-1513104890138-7c749659a591?q=80&w=1000&auto=format&fit=crop",
+            badges: ["Мясо", "Хит"]
+        },
+        {
+            id: 2,
+            name: "Sakura Ebi",
+            desc: "Тигровые креветки, соус биск, томаты черри, микрозелень.",
+            price: 1400,
+            image: "https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?q=80&w=1000&auto=format&fit=crop",
+            badges: ["Морепродукты"]
+        },
+        {
+            id: 3,
+            name: "Inferno Red",
+            desc: "Чоризо, острый перец чили, красный лук, халапеньо, мед.",
+            price: 980,
+            image: "https://images.unsplash.com/photo-1574071318508-1cdbab80d002?q=80&w=1000&auto=format&fit=crop",
+            badges: ["Острое", "Мясо"]
+        },
+        {
+            id: 4,
+            name: "Black Truffle",
+            desc: "Сливочная основа, трюфельная паста, моцарелла, пармезан.",
+            price: 1100,
+            image: "https://images.unsplash.com/photo-1513104890138-7c749659a591?q=80&w=1000&auto=format&fit=crop", // placeholder reusing style
+            badges: ["Вегетарианское"]
+        },
+        {
+            id: 5,
+            name: "Duck & Hoisin",
+            desc: "Утка конфи, соус хойсин, огурец, зеленый лук, кунжут.",
+            price: 1350,
+            image: "https://images.unsplash.com/photo-1628840042765-356cda07504e?q=80&w=1000&auto=format&fit=crop",
+            badges: ["Птица", "Азия"]
+        },
+        {
+            id: 6,
+            name: "Four Stones",
+            desc: "Горгонзола, моцарелла, пармезан, чеддер, грецкий орех.",
+            price: 950,
+            image: "https://images.unsplash.com/photo-1571407970349-bc16e6961801?q=80&w=1000&auto=format&fit=crop",
+            badges: ["Сыр"]
+        }
+    ];
+
+    // --- STATE ---
+    let cart = [];
+
+    // --- RENDER ---
+    const menuContainer = document.getElementById('menu-container');
+    const cartContainer = document.getElementById('cart-items');
+    const cartTotalEl = document.getElementById('cart-total');
+    const cartCountEl = document.getElementById('cart-count');
+
+    function renderMenu() {
+        menuContainer.innerHTML = products.map(p => `
+            <div class="product-card">
+                <div class="img-wrapper">
+                    <img src="${p.image}" alt="${p.name}">
+                    <div class="badges">
+                        ${p.badges.map(b => `<span class="badge ${b === 'Острое' || b === 'Хит' ? 'hot' : ''}">${b}</span>`).join('')}
+                    </div>
+                </div>
+                <div class="product-info">
+                    <h3>${p.name}</h3>
+                    <p class="product-desc">${p.desc}</p>
+                    <div class="price-row">
+                        <span class="price">${p.price} ₽</span>
+                        <button class="btn-add" onclick="addToCart(${p.id})">+</button>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    function renderCart() {
+        if (cart.length === 0) {
+            cartContainer.innerHTML = `<p style="text-align:center; color: var(--text-muted); margin-top: 50px; font-size: 0.9rem;">Корзина пуста<br>Выберите пиццу</p>`;
+            cartTotalEl.innerText = "0 ₽";
+            cartCountEl.innerText = "0";
+            return;
+        }
+
+        cartContainer.innerHTML = cart.map(item => `
+            <div class="cart-item">
+                <div class="cart-item-info">
+                    <h4>${item.name}</h4>
+                    <p>${item.price} ₽ x ${item.qty}</p>
+                </div>
+                <div class="cart-controls">
+                    <button class="qty-btn" onclick="removeFromCart(${item.id})">-</button>
+                    <span style="font-size:0.9rem">${item.qty}</span>
+                    <button class="qty-btn" onclick="addToCart(${item.id})">+</button>
+                </div>
+            </div>
+        `).join('');
+
+        const total = cart.reduce((acc, item) => acc + (item.price * item.qty), 0);
+        const count = cart.reduce((acc, item) => acc + item.qty, 0);
+        
+        cartTotalEl.innerText = `${total} ₽`;
+        cartCountEl.innerText = count;
+    }
+
+    // --- LOGIC ---
+    window.addToCart = (id) => {
+        const product = products.find(p => p.id === id);
+        const existing = cart.find(i => i.id === id);
+        
+        if (existing) {
+            existing.qty++;
+        } else {
+            cart.push({ ...product, qty: 1 });
+        }
+        renderCart();
+    };
+
+    window.removeFromCart = (id) => {
+        const existing = cart.find(i => i.id === id);
+        if (existing.qty > 1) {
+            existing.qty--;
+        } else {
+            cart = cart.filter(i => i.id !== id);
+        }
+        renderCart();
+    };
+
+    // Init
+    renderMenu();
+</script>
+
+</body>
+</html>

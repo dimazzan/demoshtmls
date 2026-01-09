@@ -1,0 +1,2000 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FORNO — Элитная Пицца на Дровах</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Manrope:wght@300;400;500;600&display=swap');
+
+        :root {
+            --color-bg-dark: #0a0a0a;
+            --color-bg-card: #141414;
+            --color-bg-card-hover: #1a1a1a;
+            --color-accent-gold: #c9a962;
+            --color-accent-gold-light: #e5d4a1;
+            --color-accent-bronze: #8b6914;
+            --color-text-primary: #f5f5f5;
+            --color-text-secondary: #a0a0a0;
+            --color-text-muted: #666666;
+            --color-border: #2a2a2a;
+            --color-success: #2ecc71;
+            --color-error: #e74c3c;
+            --shadow-luxury: 0 20px 60px rgba(0, 0, 0, 0.5);
+            --shadow-gold: 0 4px 20px rgba(201, 169, 98, 0.15);
+            --transition-smooth: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Manrope', sans-serif;
+            background-color: var(--color-bg-dark);
+            color: var(--color-text-primary);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        h1, h2, h3, h4 {
+            font-family: 'Playfair Display', serif;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+        }
+
+        /* Scrollbar Styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--color-bg-dark);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--color-accent-bronze);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--color-accent-gold);
+        }
+
+        /* Header */
+        header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            background: linear-gradient(180deg, rgba(10, 10, 10, 0.98) 0%, rgba(10, 10, 10, 0.9) 100%);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--color-border);
+            transition: var(--transition-smooth);
+        }
+
+        header.scrolled {
+            padding: 10px 0;
+        }
+
+        .header-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-family: 'Playfair Display', serif;
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--color-accent-gold);
+            text-decoration: none;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            position: relative;
+        }
+
+        .logo::after {
+            content: '';
+            position: absolute;
+            bottom: -5px;
+            left: 0;
+            width: 40px;
+            height: 2px;
+            background: var(--color-accent-gold);
+        }
+
+        .logo span {
+            color: var(--color-text-primary);
+        }
+
+        nav {
+            display: flex;
+            gap: 40px;
+            align-items: center;
+        }
+
+        nav a {
+            color: var(--color-text-secondary);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            position: relative;
+            padding: 10px 0;
+            transition: var(--transition-smooth);
+        }
+
+        nav a::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 0;
+            height: 2px;
+            background: var(--color-accent-gold);
+            transition: var(--transition-smooth);
+        }
+
+        nav a:hover {
+            color: var(--color-accent-gold);
+        }
+
+        nav a:hover::after {
+            width: 100%;
+        }
+
+        .cart-btn {
+            position: relative;
+            background: transparent;
+            border: 1px solid var(--color-accent-bronze);
+            padding: 12px 24px;
+            color: var(--color-accent-gold);
+            font-family: 'Manrope', sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .cart-btn:hover {
+            background: var(--color-accent-gold);
+            color: var(--color-bg-dark);
+            border-color: var(--color-accent-gold);
+        }
+
+        .cart-count {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            background: var(--color-accent-gold);
+            color: var(--color-bg-dark);
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        /* Hero Section */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            background: 
+                linear-gradient(180deg, rgba(10, 10, 10, 0.7) 0%, rgba(10, 10, 10, 0.9) 100%),
+                url('https://images.unsplash.com/photo-1513104890138-7c749659a591?w=1920') center/cover;
+            padding: 120px 40px 80px;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: radial-gradient(ellipse at center, transparent 0%, rgba(10, 10, 10, 0.8) 100%);
+        }
+
+        .hero-content {
+            max-width: 800px;
+            text-align: center;
+            position: relative;
+            z-index: 1;
+            animation: fadeInUp 1s ease-out;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(40px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .hero-subtitle {
+            font-size: 14px;
+            letter-spacing: 0.4em;
+            text-transform: uppercase;
+            color: var(--color-accent-gold);
+            margin-bottom: 24px;
+        }
+
+        .hero-title {
+            font-size: clamp(48px, 8vw, 100px);
+            line-height: 1.1;
+            margin-bottom: 32px;
+            background: linear-gradient(135deg, var(--color-text-primary) 0%, var(--color-accent-gold-light) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero-description {
+            font-size: 18px;
+            color: var(--color-text-secondary);
+            max-width: 600px;
+            margin: 0 auto 48px;
+            line-height: 1.8;
+        }
+
+        .hero-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 16px;
+            padding: 20px 48px;
+            background: linear-gradient(135deg, var(--color-accent-gold) 0%, var(--color-accent-bronze) 100%);
+            color: var(--color-bg-dark);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            border: none;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero-btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            transition: 0.5s;
+        }
+
+        .hero-btn:hover::before {
+            left: 100%;
+        }
+
+        .hero-btn:hover {
+            transform: translateY(-3px);
+            box-shadow: var(--shadow-gold);
+        }
+
+        /* Section Styling */
+        section {
+            padding: 120px 40px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .section-header {
+            text-align: center;
+            margin-bottom: 80px;
+        }
+
+        .section-subtitle {
+            font-size: 12px;
+            letter-spacing: 0.4em;
+            text-transform: uppercase;
+            color: var(--color-accent-gold);
+            margin-bottom: 16px;
+        }
+
+        .section-title {
+            font-size: clamp(32px, 5vw, 56px);
+            color: var(--color-text-primary);
+        }
+
+        .section-line {
+            width: 80px;
+            height: 2px;
+            background: var(--color-accent-gold);
+            margin: 24px auto 0;
+        }
+
+        /* Menu Section */
+        #menu {
+            background: var(--color-bg-dark);
+        }
+
+        .menu-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+            gap: 32px;
+        }
+
+        .pizza-card {
+            background: var(--color-bg-card);
+            border: 1px solid var(--color-border);
+            border-radius: 4px;
+            overflow: hidden;
+            transition: var(--transition-smooth);
+            position: relative;
+        }
+
+        .pizza-card:hover {
+            transform: translateY(-8px);
+            border-color: var(--color-accent-bronze);
+            box-shadow: var(--shadow-luxury);
+        }
+
+        .pizza-card:hover .pizza-image img {
+            transform: scale(1.08);
+        }
+
+        .pizza-image {
+            position: relative;
+            height: 280px;
+            overflow: hidden;
+        }
+
+        .pizza-image img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.6s ease;
+        }
+
+        .pizza-badge {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: var(--color-accent-gold);
+            color: var(--color-bg-dark);
+            padding: 6px 16px;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+
+        .pizza-content {
+            padding: 32px;
+        }
+
+        .pizza-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 16px;
+        }
+
+        .pizza-name {
+            font-size: 24px;
+            color: var(--color-text-primary);
+            font-family: 'Playfair Display', serif;
+        }
+
+        .pizza-price {
+            font-size: 24px;
+            color: var(--color-accent-gold);
+            font-weight: 600;
+            font-family: 'Playfair Display', serif;
+        }
+
+        .pizza-description {
+            color: var(--color-text-secondary);
+            font-size: 14px;
+            line-height: 1.7;
+            margin-bottom: 24px;
+        }
+
+        .pizza-ingredients {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 24px;
+        }
+
+        .ingredient-tag {
+            background: rgba(201, 169, 98, 0.1);
+            border: 1px solid rgba(201, 169, 98, 0.2);
+            padding: 6px 14px;
+            font-size: 12px;
+            color: var(--color-accent-gold-light);
+            letter-spacing: 0.05em;
+        }
+
+        .add-to-cart {
+            width: 100%;
+            padding: 16px;
+            background: transparent;
+            border: 1px solid var(--color-accent-bronze);
+            color: var(--color-accent-gold);
+            font-family: 'Manrope', sans-serif;
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .add-to-cart:hover {
+            background: var(--color-accent-gold);
+            color: var(--color-bg-dark);
+        }
+
+        .add-to-cart.added {
+            background: var(--color-success);
+            border-color: var(--color-success);
+            color: white;
+        }
+
+        /* Cart Sidebar */
+        .cart-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            opacity: 0;
+            visibility: hidden;
+            transition: var(--transition-smooth);
+            z-index: 1999;
+        }
+
+        .cart-overlay.active {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .cart-sidebar {
+            position: fixed;
+            top: 0;
+            right: -450px;
+            width: 450px;
+            max-width: 100%;
+            height: 100%;
+            background: var(--color-bg-card);
+            border-left: 1px solid var(--color-border);
+            z-index: 2000;
+            transition: var(--transition-smooth);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .cart-sidebar.active {
+            right: 0;
+        }
+
+        .cart-header {
+            padding: 32px;
+            border-bottom: 1px solid var(--color-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .cart-title {
+            font-size: 24px;
+            font-family: 'Playfair Display', serif;
+            color: var(--color-text-primary);
+        }
+
+        .cart-close {
+            background: transparent;
+            border: none;
+            color: var(--color-text-secondary);
+            font-size: 28px;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+            line-height: 1;
+        }
+
+        .cart-close:hover {
+            color: var(--color-accent-gold);
+        }
+
+        .cart-items {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px 32px;
+        }
+
+        .cart-item {
+            display: flex;
+            gap: 16px;
+            padding: 20px 0;
+            border-bottom: 1px solid var(--color-border);
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateX(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .cart-item-image {
+            width: 80px;
+            height: 80px;
+            border-radius: 4px;
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+
+        .cart-item-image img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .cart-item-details {
+            flex: 1;
+        }
+
+        .cart-item-name {
+            font-size: 16px;
+            color: var(--color-text-primary);
+            margin-bottom: 8px;
+            font-family: 'Playfair Display', serif;
+        }
+
+        .cart-item-price {
+            font-size: 14px;
+            color: var(--color-accent-gold);
+            margin-bottom: 12px;
+        }
+
+        .cart-item-controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .qty-btn {
+            width: 32px;
+            height: 32px;
+            background: transparent;
+            border: 1px solid var(--color-border);
+            color: var(--color-text-secondary);
+            font-size: 16px;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .qty-btn:hover {
+            border-color: var(--color-accent-gold);
+            color: var(--color-accent-gold);
+        }
+
+        .cart-item-qty {
+            font-size: 14px;
+            color: var(--color-text-primary);
+            min-width: 24px;
+            text-align: center;
+        }
+
+        .cart-item-remove {
+            margin-left: auto;
+            background: transparent;
+            border: none;
+            color: var(--color-text-muted);
+            cursor: pointer;
+            transition: var(--transition-smooth);
+            font-size: 18px;
+        }
+
+        .cart-item-remove:hover {
+            color: var(--color-error);
+        }
+
+        .cart-empty {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--color-text-muted);
+        }
+
+        .cart-empty-icon {
+            font-size: 64px;
+            margin-bottom: 24px;
+            opacity: 0.3;
+        }
+
+        .cart-footer {
+            padding: 32px;
+            border-top: 1px solid var(--color-border);
+        }
+
+        .cart-subtotal {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .cart-subtotal-label {
+            color: var(--color-text-secondary);
+            font-size: 14px;
+        }
+
+        .cart-subtotal-value {
+            color: var(--color-text-primary);
+            font-size: 18px;
+            font-family: 'Playfair Display', serif;
+        }
+
+        .cart-total {
+            display: flex;
+            justify-content: space-between;
+            padding-top: 16px;
+            margin-top: 16px;
+            border-top: 1px solid var(--color-border);
+        }
+
+        .cart-total-label {
+            color: var(--color-text-primary);
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .cart-total-value {
+            color: var(--color-accent-gold);
+            font-size: 28px;
+            font-weight: 600;
+            font-family: 'Playfair Display', serif;
+        }
+
+        .checkout-btn {
+            width: 100%;
+            padding: 20px;
+            margin-top: 24px;
+            background: linear-gradient(135deg, var(--color-accent-gold) 0%, var(--color-accent-bronze) 100%);
+            border: none;
+            color: var(--color-bg-dark);
+            font-family: 'Manrope', sans-serif;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+        }
+
+        .checkout-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-gold);
+        }
+
+        .checkout-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Order Form Section */
+        #order {
+            background: linear-gradient(180deg, var(--color-bg-dark) 0%, var(--color-bg-card) 100%);
+        }
+
+        .order-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 80px;
+            align-items: start;
+        }
+
+        .order-info {
+            padding-right: 40px;
+        }
+
+        .order-info-title {
+            font-size: 36px;
+            margin-bottom: 24px;
+            color: var(--color-text-primary);
+        }
+
+        .order-info-text {
+            color: var(--color-text-secondary);
+            font-size: 16px;
+            line-height: 1.8;
+            margin-bottom: 40px;
+        }
+
+        .order-features {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        .order-feature {
+            display: flex;
+            align-items: flex-start;
+            gap: 20px;
+        }
+
+        .order-feature-icon {
+            width: 56px;
+            height: 56px;
+            background: rgba(201, 169, 98, 0.1);
+            border: 1px solid rgba(201, 169, 98, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-size: 24px;
+        }
+
+        .order-feature-title {
+            font-size: 18px;
+            color: var(--color-text-primary);
+            margin-bottom: 8px;
+            font-family: 'Playfair Display', serif;
+        }
+
+        .order-feature-text {
+            font-size: 14px;
+            color: var(--color-text-secondary);
+            line-height: 1.6;
+        }
+
+        .order-form {
+            background: var(--color-bg-card);
+            border: 1px solid var(--color-border);
+            padding: 48px;
+        }
+
+        .form-title {
+            font-size: 28px;
+            margin-bottom: 32px;
+            text-align: center;
+            color: var(--color-text-primary);
+        }
+
+        .form-group {
+            margin-bottom: 24px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 12px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--color-text-secondary);
+            margin-bottom: 10px;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 16px 20px;
+            background: var(--color-bg-dark);
+            border: 1px solid var(--color-border);
+            color: var(--color-text-primary);
+            font-family: 'Manrope', sans-serif;
+            font-size: 15px;
+            transition: var(--transition-smooth);
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--color-accent-gold);
+            box-shadow: var(--shadow-gold);
+        }
+
+        .form-input::placeholder {
+            color: var(--color-text-muted);
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .form-select {
+            width: 100%;
+            padding: 16px 20px;
+            background: var(--color-bg-dark);
+            border: 1px solid var(--color-border);
+            color: var(--color-text-primary);
+            font-family: 'Manrope', sans-serif;
+            font-size: 15px;
+            cursor: pointer;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%23c9a962' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10l-5 5z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 16px center;
+        }
+
+        .form-select:focus {
+            outline: none;
+            border-color: var(--color-accent-gold);
+        }
+
+        .form-textarea {
+            width: 100%;
+            padding: 16px 20px;
+            background: var(--color-bg-dark);
+            border: 1px solid var(--color-border);
+            color: var(--color-text-primary);
+            font-family: 'Manrope', sans-serif;
+            font-size: 15px;
+            resize: vertical;
+            min-height: 120px;
+            transition: var(--transition-smooth);
+        }
+
+        .form-textarea:focus {
+            outline: none;
+            border-color: var(--color-accent-gold);
+            box-shadow: var(--shadow-gold);
+        }
+
+        .form-submit {
+            width: 100%;
+            padding: 20px;
+            background: linear-gradient(135deg, var(--color-accent-gold) 0%, var(--color-accent-bronze) 100%);
+            border: none;
+            color: var(--color-bg-dark);
+            font-family: 'Manrope', sans-serif;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+        }
+
+        .form-submit:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-gold);
+        }
+
+        /* Map Section */
+        #map-section {
+            padding: 0;
+            max-width: 100%;
+            background: var(--color-bg-card);
+        }
+
+        .map-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            min-height: 600px;
+        }
+
+        .map-info {
+            padding: 80px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .map-info-title {
+            font-size: 36px;
+            margin-bottom: 32px;
+            color: var(--color-text-primary);
+        }
+
+        .map-details {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        .map-detail {
+            display: flex;
+            align-items: flex-start;
+            gap: 16px;
+        }
+
+        .map-detail-icon {
+            width: 48px;
+            height: 48px;
+            background: rgba(201, 169, 98, 0.1);
+            border: 1px solid rgba(201, 169, 98, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-size: 20px;
+        }
+
+        .map-detail-content h4 {
+            font-size: 16px;
+            color: var(--color-text-primary);
+            margin-bottom: 4px;
+            font-family: 'Manrope', sans-serif;
+            font-weight: 600;
+        }
+
+        .map-detail-content p {
+            font-size: 14px;
+            color: var(--color-text-secondary);
+        }
+
+        .map-visual {
+            background: var(--color-bg-dark);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .map-visual::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=1200') center/cover;
+            opacity: 0.6;
+        }
+
+        .map-placeholder {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: var(--color-text-primary);
+        }
+
+        .map-marker {
+            width: 60px;
+            height: 60px;
+            background: var(--color-accent-gold);
+            border-radius: 50% 50% 50% 0;
+            transform: rotate(-45deg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 24px;
+            animation: bounce 2s infinite;
+        }
+
+        .map-marker::after {
+            content: '';
+            width: 20px;
+            height: 20px;
+            background: var(--color-bg-dark);
+            border-radius: 50%;
+            transform: rotate(45deg);
+        }
+
+        @keyframes bounce {
+            0%, 20%, 50%, 80%, 100% {
+                transform: rotate(-45deg) translateY(0);
+            }
+            40% {
+                transform: rotate(-45deg) translateY(-20px);
+            }
+            60% {
+                transform: rotate(-45deg) translateY(-10px);
+            }
+        }
+
+        .map-address {
+            font-size: 18px;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .map-coords {
+            font-size: 14px;
+            color: var(--color-text-muted);
+        }
+
+        /* Footer */
+        footer {
+            background: var(--color-bg-card);
+            border-top: 1px solid var(--color-border);
+            padding: 80px 40px 40px;
+        }
+
+        .footer-container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .footer-top {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr;
+            gap: 60px;
+            margin-bottom: 60px;
+        }
+
+        .footer-brand {
+            padding-right: 40px;
+        }
+
+        .footer-logo {
+            font-family: 'Playfair Display', serif;
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--color-accent-gold);
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            margin-bottom: 24px;
+            display: inline-block;
+        }
+
+        .footer-tagline {
+            color: var(--color-text-secondary);
+            font-size: 14px;
+            line-height: 1.8;
+            margin-bottom: 24px;
+        }
+
+        .social-links {
+            display: flex;
+            gap: 16px;
+        }
+
+        .social-link {
+            width: 44px;
+            height: 44px;
+            border: 1px solid var(--color-border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--color-text-secondary);
+            text-decoration: none;
+            transition: var(--transition-smooth);
+        }
+
+        .social-link:hover {
+            border-color: var(--color-accent-gold);
+            color: var(--color-accent-gold);
+        }
+
+        .footer-column h4 {
+            font-size: 14px;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            color: var(--color-text-primary);
+            margin-bottom: 24px;
+        }
+
+        .footer-links {
+            list-style: none;
+        }
+
+        .footer-links li {
+            margin-bottom: 12px;
+        }
+
+        .footer-links a {
+            color: var(--color-text-secondary);
+            text-decoration: none;
+            font-size: 14px;
+            transition: var(--transition-smooth);
+        }
+
+        .footer-links a:hover {
+            color: var(--color-accent-gold);
+        }
+
+        .footer-bottom {
+            padding-top: 40px;
+            border-top: 1px solid var(--color-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .footer-copyright {
+            color: var(--color-text-muted);
+            font-size: 13px;
+        }
+
+        .footer-cards {
+            display: flex;
+            gap: 12px;
+        }
+
+        .footer-card {
+            width: 48px;
+            height: 32px;
+            background: var(--color-bg-dark);
+            border: 1px solid var(--color-border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            color: var(--color-text-secondary);
+        }
+
+        /* Floating Cart Button (Mobile) */
+        .floating-cart {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            z-index: 999;
+            display: none;
+        }
+
+        .floating-cart-btn {
+            width: 64px;
+            height: 64px;
+            background: linear-gradient(135deg, var(--color-accent-gold) 0%, var(--color-accent-bronze) 100%);
+            border: none;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            cursor: pointer;
+            box-shadow: var(--shadow-luxury);
+            transition: var(--transition-smooth);
+        }
+
+        .floating-cart-btn:hover {
+            transform: scale(1.1);
+        }
+
+        .floating-cart-count {
+            position: absolute;
+            top: -4px;
+            right: -4px;
+            width: 24px;
+            height: 24px;
+            background: var(--color-bg-dark);
+            color: var(--color-accent-gold);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 1200px) {
+            .order-container {
+                grid-template-columns: 1fr;
+                gap: 60px;
+            }
+
+            .order-info {
+                padding-right: 0;
+            }
+
+            .footer-top {
+                grid-template-columns: 1fr 1fr;
+                gap: 40px;
+            }
+        }
+
+        @media (max-width: 992px) {
+            .header-container {
+                padding: 16px 24px;
+            }
+
+            nav {
+                display: none;
+            }
+
+            .cart-btn {
+                padding: 10px 16px;
+            }
+
+            section {
+                padding: 80px 24px;
+            }
+
+            .menu-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .map-container {
+                grid-template-columns: 1fr;
+            }
+
+            .map-info {
+                padding: 60px 24px;
+            }
+
+            .map-visual {
+                height: 400px;
+            }
+
+            .order-form {
+                padding: 32px 24px;
+            }
+
+            .floating-cart {
+                display: block;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .hero {
+                padding: 100px 24px 60px;
+            }
+
+            .hero-title {
+                font-size: 36px;
+            }
+
+            .hero-btn {
+                padding: 16px 32px;
+            }
+
+            .footer-top {
+                grid-template-columns: 1fr;
+                gap: 40px;
+            }
+
+            .footer-brand {
+                padding-right: 0;
+            }
+
+            .footer-bottom {
+                flex-direction: column;
+                gap: 24px;
+                text-align: center;
+            }
+
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+
+            .cart-sidebar {
+                width: 100%;
+                right: -100%;
+            }
+        }
+
+        /* Animations */
+        .fade-in {
+            opacity: 0;
+            transform: translateY(30px);
+            transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+        }
+
+        .fade-in.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        /* Toast Notification */
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: var(--color-bg-card);
+            border: 1px solid var(--color-accent-gold);
+            padding: 20px 32px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            z-index: 3000;
+            transition: var(--transition-smooth);
+            box-shadow: var(--shadow-luxury);
+        }
+
+        .toast.active {
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .toast-icon {
+            font-size: 24px;
+        }
+
+        .toast-message {
+            color: var(--color-text-primary);
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header id="header">
+        <div class="header-container">
+            <a href="#" class="logo">FOR<span>NO</span></a>
+            <nav>
+                <a href="#menu">Меню</a>
+                <a href="#order">Заказать</a>
+                <a href="#contacts">Контакты</a>
+            </nav>
+            <button class="cart-btn" id="cartBtn">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M6 6h15l-1.5 9h-12z"/>
+                    <circle cx="9" cy="20" r="1"/>
+                    <circle cx="18" cy="20" r="1"/>
+                    <path d="M6 6L5 3H2"/>
+                </svg>
+                Корзина
+                <span class="cart-count" id="cartCount">0</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Cart Sidebar -->
+    <div class="cart-overlay" id="cartOverlay"></div>
+    <aside class="cart-sidebar" id="cartSidebar">
+        <div class="cart-header">
+            <h3 class="cart-title">Ваш заказ</h3>
+            <button class="cart-close" id="cartClose">×</button>
+        </div>
+        <div class="cart-items" id="cartItems">
+            <div class="cart-empty">
+                <div class="cart-empty-icon">🛒</div>
+                <p>Корзина пуста</p>
+            </div>
+        </div>
+        <div class="cart-footer">
+            <div class="cart-subtotal">
+                <span class="cart-subtotal-label">Подытог</span>
+                <span class="cart-subtotal-value" id="cartSubtotal">0 ₽</span>
+            </div>
+            <div class="cart-total">
+                <span class="cart-total-label">Итого</span>
+                <span class="cart-total-value" id="cartTotal">0 ₽</span>
+            </div>
+            <button class="checkout-btn" id="checkoutBtn" disabled>Оформить заказ</button>
+        </div>
+    </aside>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-content">
+            <p class="hero-subtitle">Искусство огня</p>
+            <h1 class="hero-title">Пицца, рождённая<br>в дровяной печи</h1>
+            <p class="hero-description">
+                Традиционные рецепты, отборные ингредиенты и температура 450°C. 
+                Каждая пицца — это шедевр, созданный мастером своего дела.
+            </p>
+            <a href="#menu" class="hero-btn">
+                Выбрать пиццу
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M5 12h14M12 5l7 7-7 7"/>
+                </svg>
+            </a>
+        </div>
+    </section>
+
+    <!-- Menu Section -->
+    <section id="menu">
+        <div class="section-header">
+            <p class="section-subtitle">Наше меню</p>
+            <h2 class="section-title">Премиальные рецепты</h2>
+            <div class="section-line"></div>
+        </div>
+        <div class="menu-grid">
+            <!-- Pizza 1 -->
+            <div class="pizza-card fade-in">
+                <div class="pizza-image">
+                    <img src="https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=600" alt="Маргарита Премиум">
+                    <span class="pizza-badge">Хит</span>
+                </div>
+                <div class="pizza-content">
+                    <div class="pizza-header">
+                        <h3 class="pizza-name">Маргарита Премиум</h3>
+                        <span class="pizza-price">1 490 ₽</span>
+                    </div>
+                    <p class="pizza-description">
+                        Классика итальянской кухни в нашем исполнении. 
+                        Тонкое тесто, томаты San Marzano, моцарелла буйвола и свежий базилик.
+                    </p>
+                    <div class="pizza-ingredients">
+                        <span class="ingredient-tag">Моцарелла</span>
+                        <span class="ingredient-tag">Томаты</span>
+                        <span class="ingredient-tag">Базилик</span>
+                    </div>
+                    <button class="add-to-cart" data-id="1" data-name="Маргарита Премиум" data-price="1490" data-image="https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=200">
+                        В корзину
+                    </button>
+                </div>
+            </div>
+
+            <!-- Pizza 2 -->
+            <div class="pizza-card fade-in">
+                <div class="pizza-image">
+                    <img src="https://images.unsplash.com/photo-1628840042765-356cda07504e?w=600" alt="Карбонара">
+                </div>
+                <div class="pizza-content">
+                    <div class="pizza-header">
+                        <h3 class="pizza-name">Карбонара</h3>
+                        <span class="pizza-price">1 690 ₽</span>
+                    </div>
+                    <p class="pizza-description">
+                        Нежная ветчина пармы, хрустящий панчетта, перепелиные яйца и 
+                        пармезан 24-месячной выдержки.
+                    </p>
+                    <div class="pizza-ingredients">
+                        <span class="ingredient-tag">Ветчина</span>
+                        <span class="ingredient-tag">Яйцо</span>
+                        <span class="ingredient-tag">Пармезан</span>
+                    </div>
+                    <button class="add-to-cart" data-id="2" data-name="Карбонара" data-price="1690" data-image="https://images.unsplash.com/photo-1628840042765-356cda07504e?w=200">
+                        В корзину
+                    </button>
+                </div>
+            </div>
+
+            <!-- Pizza 3 -->
+            <div class="pizza-card fade-in">
+                <div class="pizza-image">
+                    <img src="https://images.unsplash.com/photo-1593560708920-61dd98c46a4e?w=600" alt="Четыре Сыра">
+                    <span class="pizza-badge">Топ</span>
+                </div>
+                <div class="pizza-content">
+                    <div class="pizza-header">
+                        <h3 class="pizza-name">Четыре Сыра</h3>
+                        <span class="pizza-price">1 890 ₽</span>
+                    </div>
+                    <p class="pizza-description">
+                        Благородное сочетание горгонзолы, таледжо, моцареллы и 
+                        пармезана. Сливочная текстура с пикантной ноткой.
+                    </p>
+                    <div class="pizza-ingredients">
+                        <span class="ingredient-tag">Горгонзола</span>
+                        <span class="ingredient-tag">Таледжо</span>
+                        <span class="ingredient-tag">4 сыра</span>
+                    </div>
+                    <button class="add-to-cart" data-id="3" data-name="Четыре Сыра" data-price="1890" data-image="https://images.unsplash.com/photo-1593560708920-61dd98c46a4e?w=200">
+                        В корзину
+                    </button>
+                </div>
+            </div>
+
+            <!-- Pizza 4 -->
+            <div class="pizza-card fade-in">
+                <div class="pizza-image">
+                    <img src="https://images.unsplash.com/photo-1513104890138-7c749659a591?w=600" alt="Прошуто">
+                    <span class=" pizza-badge">Новинка</span>
+                </div>
+                <div class="pizza-content">
+                    <div class="pizza-header">
+                        <h3 class="pizza-name">Прошуто</h3>
+                        <span class="pizza-price">2 190 ₽</span>
+                    </div>
+                    <p class="pizza-description">
+                        Тончайшие ломтики прошуто ди Парма, руккола, томаты черри 
+                        и бальзамическая глазурь. Легкость и изысканность.
+                    </p>
+                    <div class="pizza-ingredients">
+                        <span class="ingredient-tag">Прошуто</span>
+                        <span class="ingredient-tag">Руккола</span>
+                        <span class="ingredient-tag">Бальзамик</span>
+                    </div>
+                    <button class="add-to-cart" data-id="4" data-name="Прошуто" data-price="2190" data-image="https://images.unsplash.com/photo-1513104890138-7c749659a591?w=200">
+                        В корзину
+                    </button>
+                </div>
+            </div>
+
+            <!-- Pizza 5 -->
+            <div class="pizza-card fade-in">
+                <div class="pizza-image">
+                    <img src="https://images.unsplash.com/photo-1604382355076-af4b0eb60143?w=600" alt="Талятелле">
+                </div>
+                <div class="pizza-content">
+                    <div class="pizza-header">
+                        <h3 class="pizza-name">Талятелле</h3>
+                        <span class="pizza-price">1 590 ₽</span>
+                    </div>
+                    <p class="pizza-description">
+                        Домашняя паста талятелле, трюфельное масло, грибы поробелла 
+                        и пармезан. Сочетание двух итальянских традиций.
+                    </p>
+                    <div class="pizza-ingredients">
+                        <span class="ingredient-tag">Трюфель</span>
+                        <span class="ingredient-tag">Грибы</span>
+                        <span class="ingredient-tag">Паста</span>
+                    </div>
+                    <button class="add-to-cart" data-id="5" data-name="Талятелле" data-price="1590" data-image="https://images.unsplash.com/photo-1604382355076-af4b0eb60143?w=200">
+                        В корзину
+                    </button>
+                </div>
+            </div>
+
+            <!-- Pizza 6 -->
+            <div class="pizza-card fade-in">
+                <div class="pizza-image">
+                    <img src="https://images.unsplash.com/photo-1576458088443-04a19bb13da6?w=600" alt="Фирменная FORNO">
+                    <span class="pizza-badge">Шеф</span>
+                </div>
+                <div class="pizza-content">
+                    <div class="pizza-header">
+                        <h3 class="pizza-name">Фирменная FORNO</h3>
+                        <span class="pizza-price">2 490 ₽</span>
+                    </div>
+                    <p class="pizza-description">
+                        Наша гордость: утиная грудка, инжир, козий сыр и медово-горчичная 
+                        заправка. Единственная в своём роде.
+                    </p>
+                    <div class="pizza-ingredients">
+                        <span class="ingredient-tag">Утка</span>
+                        <span class="ingredient-tag">Инжир</span>
+                        <span class="ingredient-tag">Козий сыр</span>
+                    </div>
+                    <button class="add-to-cart" data-id="6" data-name="Фирменная FORNO" data-price="2490" data-image="https://images.unsplash.com/photo-1576458088443-04a19bb13da6?w=200">
+                        В корзину
+                    </button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Order Section -->
+    <section id="order">
+        <div class="order-container">
+            <div class="order-info fade-in">
+                <h2 class="order-info-title">Оформление заказа</h2>
+                <p class="order-info-text">
+                    Мы доставляем пиццу в специальных термосумках, сохраняющих 
+                    температуру до 45 минут. Каждая пицца готовится в момент 
+                    получения заказа.
+                </p>
+                <div class="order-features">
+                    <div class="order-feature">
+                        <div class="order-feature-icon">🔥</div>
+                        <div>
+                            <h4 class="order-feature-title">Дровяная печь</h4>
+                            <p class="order-feature-text">Готовим при 450°C на ольховых дровах для идеального вкуса и хрустящей корочки</p>
+                        </div>
+                    </div>
+                    <div class="order-feature">
+                        <div class="order-feature-icon">⏱️</div>
+                        <div>
+                            <h4 class="order-feature-title">Быстрая доставка</h4>
+                            <p class="order-feature-text">Доставка по центру города за 25-35 минут. Свежесть гарантирована</p>
+                        </div>
+                    </div>
+                    <div class="order-feature">
+                        <div class="order-feature-icon">🎁</div>
+                        <div>
+                            <h4 class="order-feature-title">Премиум сервис</h4>
+                            <p class="order-feature-text">Бесплатная доставка при заказе от 2000 ₽. Подарочная упаковка для особых случаев</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="order-form fade-in">
+                <h3 class="form-title">Оформить заказ</h3>
+                <form id="orderForm">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label">Имя</label>
+                            <input type="text" class="form-input" placeholder="Ваше имя" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Телефон</label>
+                            <input type="tel" class="form-input" placeholder="+7 (___) ___-__-__" required>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Адрес доставки</label>
+                        <input type="text" class="form-input" placeholder="Улица, дом, квартира" required>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label">Время</label>
+                            <select class="form-select">
+                                <option>Как можно скорее</option>
+                                <option>Через 30 минут</option>
+                                <option>Через 1 час</option>
+                                <option>Через 2 часа</option>
+                                <option>Указать время</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Способ оплаты</label>
+                            <select class="form-select">
+                                <option>Наличными</option>
+                                <option>Картой при получении</option>
+                                <option>Онлайн</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Комментарий</label>
+                        <textarea class="form-textarea" placeholder="Пожелания к заказу, код домофона и т.д."></textarea>
+                    </div>
+                    <button type="submit" class="form-submit">Заказать пиццу</button>
+                </form>
+            </div>
+        </div>
+    </section>
+
+    <!-- Map Section -->
+    <section id="contacts" id="map-section">
+        <div class="map-container">
+            <div class="map-info fade-in">
+                <h2 class="map-info-title">Наш ресторан</h2>
+                <div class="map-details">
+                    <div class="map-detail">
+                        <div class="map-detail-icon">📍</div>
+                        <div class="map-detail-content">
+                            <h4>Адрес</h4>
+                            <p>г. Москва, Пресненская наб., 12, Москва-Сити</p>
+                        </div>
+                    </div>
+                    <div class="map-detail">
+                        <div class="map-detail-icon">🕐</div>
+                        <div class="map-detail-content">
+                            <h4>Время работы</h4>
+                            <p>Ежедневно с 12:00 до 23:00</p>
+                        </div>
+                    </div>
+                    <div class="map-detail">
+                        <div class="map-detail-icon">📞</div>
+                        <div class="map-detail-content">
+                            <h4>Телефон</h4>
+                            <p>+7 (495) 123-45-67</p>
+                        </div>
+                    </div>
+                    <div class="map-detail">
+                        <div class="map-detail-icon">✉️</div>
+                        <div class="map-detail-content">
+                            <h4>Email</h4>
+                            <p><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="31585f575e71575e435f5e1f4344">[email&#160;protected]</a></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="map-visual">
+                <div class="map-placeholder">
+                    <div class="map-marker"></div>
+                    <p class="map-address">FORNO — Пресненская наб., 12</p>
+                    <p class="map-coords">55.7478° N, 37.5398° E</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <div class="footer-container">
+            <div class="footer-top">
+                <div class="footer-brand">
+                    <span class="footer-logo">FORNO</span>
+                    <p class="footer-tagline">
+                        Искусство итальянской пиццы на дровах. 
+                        Традиции, воплощённые в каждом кусочке.
+                    </p>
+                    <div class="social-links">
+                        <a href="#" class="social-link">tg</a>
+                        <a href="#" class="social-link">vk</a>
+                        <a href="#" class="social-link">wa</a>
+                    </div>
+                </div>
+                <div class="footer-column">
+                    <h4>Меню</h4>
+                    <ul class="footer-links">
+                        <li><a href="#">Пицца</a></li>
+                        <li><a href="#">Паста</a></li>
+                        <li><a href="#">Антипасти</a></li>
+                        <li><a href="#">Десерты</a></li>
+                    </ul>
+                </div>
+                <div class="footer-column">
+                    <h4>Компания</h4>
+                    <ul class="footer-links">
+                        <li><a href="#">О нас</a></li>
+                        <li><a href="#">Вакансии</a></li>
+                        <li><a href="#">Пресс-центр</a></li>
+                        <li><a href="#">Контакты</a></li>
+                    </ul>
+                </div>
+                <div class="footer-column">
+                    <h4>Поддержка</h4>
+                    <ul class="footer-links">
+                        <li><a href="#">FAQ</a></li>
+                        <li><a href="#">Доставка</a></li>
+                        <li><a href="#">Возврат</a></li>
+                        <li><a href="#">Правовая информация</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p class="footer-copyright">© 2024 FORNO. Все права защищены.</p>
+                <div class="footer-cards">
+                    <div class="footer-card">VISA</div>
+                    <div class="footer-card">MC</div>
+                    <div class="footer-card">MIR</div>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Floating Cart (Mobile) -->
+    <div class="floating-cart">
+        <button class="floating-cart-btn" id="floatingCartBtn">
+            🛒
+            <span class="floating-cart-count" id="floatingCartCount">0</span>
+        </button>
+    </div>
+
+    <!-- Toast Notification -->
+    <div class="toast" id="toast">
+        <span class="toast-icon">✓</span>
+        <span class="toast-message" id="toastMessage">Товар добавлен в корзину</span>
+    </div>
+
+    <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
+        // Cart functionality
+        const cart = {
+            items: [],
+            
+            add(item) {
+                const existingItem = this.items.find(i => i.id === item.id);
+                if (existingItem) {
+                    existingItem.qty++;
+                } else {
+                    this.items.push({...item, qty: 1});
+                }
+                this.save();
+                this.updateUI();
+            },
+            
+            remove(id) {
+                this.items = this.items.filter(i => i.id !== id);
+                this.save();
+                this.updateUI();
+            },
+            
+            updateQty(id, delta) {
+                const item = this.items.find(i => i.id === id);
+                if (item) {
+                    item.qty += delta;
+                    if (item.qty <= 0) {
+                        this.remove(id);
+                    } else {
+                        this.save();
+                        this.updateUI();
+                    }
+                }
+            },
+            
+            get total() {
+                return this.items.reduce((sum, item) => sum + (item.price * item.qty), 0);
+            },
+            
+            get count() {
+                return this.items.reduce((sum, item) => sum + item.qty, 0);
+            },
+            
+            save() {
+                localStorage.setItem('forno_cart', JSON.stringify(this.items));
+            },
+            
+            load() {
+                const saved = localStorage.getItem('forno_cart');
+                if (saved) {
+                    this.items = JSON.parse(saved);
+                }
+            },
+            
+            updateUI() {
+                // Update cart count in header
+                document.getElementById('cartCount').textContent = this.count;
+                document.getElementById('floatingCartCount').textContent = this.count;
+                
+                // Update cart sidebar
+                this.renderCartItems();
+                
+                // Update totals
+                document.getElementById('cartSubtotal').textContent = this.total.toLocaleString('ru-RU') + ' ₽';
+                document.getElementById('cartTotal').textContent = this.total.toLocaleString('ru-RU') + ' ₽';
+                
+                // Enable/disable checkout button
+                document.getElementById('checkoutBtn').disabled = this.count === 0;
+            },
+            
+            renderCartItems() {
+                const container = document.getElementById('cartItems');
+                
+                if (this.items.length === 0) {
+                    container.innerHTML = `
+                        <div class="cart-empty">
+                            <div class="cart-empty-icon">🛒</div>
+                            <p>Корзина пуста</p>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                container.innerHTML = this.items.map(item => `
+                    <div class="cart-item" data-id="${item.id}">
+                        <div class="cart-item-image">
+                            <img src="${item.image}" alt="${item.name}">
+                        </div>
+                        <div class="cart-item-details">
+                            <div class="cart-item-name">${item.name}</div>
+                            <div class="cart-item-price">${item.price.toLocaleString('ru-RU')} ₽</div>
+                            <div class="cart-item-controls">
+                                <button class="qty-btn" onclick="cart.updateQty(${item.id}, -1)">−</button>
+                                <span class="cart-item-qty">${item.qty}</span>
+                                <button class="qty-btn" onclick="cart.updateQty(${item.id}, 1)">+</button>
+                                <button class="cart-item-remove" onclick="cart.remove(${item.id})">×</button>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            },
+            
+            clear() {
+                this.items = [];
+                this.save();
+                this.updateUI();
+            }
+        };
+
+        // Initialize cart
+        cart.load();
+        cart.updateUI();
+
+        // DOM Elements
+        const cartBtn = document.getElementById('cartBtn');
+        const cartSidebar = document.getElementById('cartSidebar');
+        const cartOverlay = document.getElementById('cartOverlay');
+        const cartClose = document.getElementById('cartClose');
+        const floatingCartBtn = document.getElementById('floatingCartBtn');
+        const checkoutBtn = document.getElementById('checkoutBtn');
+        const toast = document.getElementById('toast');
+        const toastMessage = document.getElementById('toastMessage');
+
+        // Cart sidebar toggle
+        function openCart() {
+            cartSidebar.classList.add('active');
+            cartOverlay.classList.add('active');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeCart() {
+            cartSidebar.classList.remove('active');
+            cartOverlay.classList.remove('active');
+            document.body.style.overflow = '';
+        }
+
+        cartBtn.addEventListener('click', openCart);
+        floatingCartBtn.addEventListener('click', openCart);
+        cartClose.addEventListener('click', closeCart);
+        cartOverlay.addEventListener('click', closeCart);
+
+        // Add to cart buttons
+        document.querySelectorAll('.add-to-cart').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const item = {
+                    id: parseInt(this.dataset.id),
+                    name: this.dataset.name,
+                    price: parseInt(this.dataset.price),
+                    image: this.dataset.image
+                };
+                
+                cart.add(item);
+                
+                // Show feedback
+                this.classList.add('added');
+                this.textContent = 'Добавлено';
+                
+                showToast(`«${item.name}» добавлена в корзину`);
+                
+                setTimeout(() => {
+                    this.classList.remove('added');
+                    this.textContent = 'В корзину';
+                }, 1500);
+            });
+        });
+
+        // Checkout button
+        checkoutBtn.addEventListener('click', function() {
+            if (cart.count > 0) {
+                showToast('Спасибо за заказ! Мы свяжемся с вами.');
+                cart.clear();
+                closeCart();
+            }
+        });
+
+        // Order form
+        document.getElementById('orderForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            if (cart.count > 0) {
+                showToast('Спасибо за заказ! Мы свяжемся с вами.');
+                cart.clear();
+                this.reset();
+            } else {
+                showToast('Добавьте пиццу в корзину');
+            }
+        });
+
+        // Toast notification
+        function showToast(message) {
+            toastMessage.textContent = message;
+            toast.classList.add('active');
+            setTimeout(() => {
+                toast.classList.remove('active');
+            }, 3000);
+        }
+
+        // Header scroll effect
+        window.addEventListener('scroll', function() {
+            const header = document.getElementById('header');
+            if (window.scrollY > 50) {
+                header.classList.add('scrolled');
+            } else {
+                header.classList.remove('scrolled');
+            }
+        });
+
+        // Fade in animations on scroll
+        const observerOptions = {
+            threshold: 0.1,
+            rootMargin: '0px 0px -50px 0px'
+        };
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('visible');
+                }
+            });
+        }, observerOptions);
+
+        document.querySelectorAll('.fade-in').forEach(el => {
+            observer.observe(el);
+        });
+
+        // Smooth scroll for anchor links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function(e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start'
+                    });
+                }
+            });
+        });
+    </script>
+</body>
+</html>

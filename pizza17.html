@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ОЧАГЪ | Дровяная пицца</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Oswald:wght@400;500;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="pizza17.css">
+</head>
+<body>
+    <!-- Навигация -->
+    <nav class="nav">
+        <div class="nav-container">
+            <div class="logo">
+                <span class="logo-fire">&#9679;</span>
+                <span class="logo-text">ОЧАГЪ</span>
+            </div>
+            <div class="nav-links">
+                <a href="#menu" class="nav-link">МЕНЮ</a>
+                <a href="#about" class="nav-link">О НАС</a>
+                <a href="#contacts" class="nav-link">КОНТАКТЫ</a>
+            </div>
+            <div class="cart-btn" id="cartBtn">
+                <svg class="cart-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="9" cy="21" r="1"></circle>
+                    <circle cx="20" cy="21" r="1"></circle>
+                    <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"></path>
+                </svg>
+                <span class="cart-count" id="cartCount">0</span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Герой-секция -->
+    <header class="hero">
+        <div class="hero-content">
+            <h1 class="hero-title">
+                <span class="hero-subtitle">ТРАДИЦИИ</span>
+                <span class="hero-main">ДРОВЯНОГО<br>ОЧАГА</span>
+            </h1>
+            <p class="hero-description">
+                Неаполитанская пицца, выпеченная в печи ручной работы<br>
+                при температуре 450°C за 90 секунд
+            </p>
+            <a href="#menu" class="hero-btn">ВЫБРАТЬ ПИЦЦУ</a>
+        </div>
+        <div class="hero-overlay"></div>
+    </header>
+
+    <!-- Каталог -->
+    <section class="menu" id="menu">
+        <div class="menu-header">
+            <span class="menu-number">01</span>
+            <h2 class="menu-title">НАШЕ МЕНЮ</h2>
+            <div class="menu-line"></div>
+        </div>
+
+        <!-- Фильтры -->
+        <div class="menu-filters">
+            <button class="filter-btn active" data-filter="all">ВСЁ</button>
+            <button class="filter-btn" data-filter="meat">С МЯСОМ</button>
+            <button class="filter-btn" data-filter="vegetarian">ВЕГЕТАРИАНСКИЕ</button>
+            <button class="filter-btn" data-filter="spicy">ОСТРЫЕ</button>
+        </div>
+
+        <!-- Карточки товаров -->
+        <div class="products-grid" id="productsGrid">
+            <!-- Карточка 1 -->
+            <div class="product-card" data-category="meat">
+                <div class="product-image">
+                    <img src="https://images.unsplash.com/photo-1628840042765-356cda07504e?w=400&h=300&fit=crop" alt="Пицца Маргарита">
+                    <div class="product-badge badge-meat">С МЯСОМ</div>
+                    <div class="product-badge badge-hit">ХИТ</div>
+                </div>
+                <div class="product-info">
+                    <h3 class="product-name">КАЛАБРИЯ</h3>
+                    <p class="product-description">Пепперони, моцарелла, томатный соус, орегано, базилик</p>
+                    <div class="product-footer">
+                        <span class="product-price">590 ₽</span>
+                        <button class="add-btn" data-id="1" data-name="КАЛАБРИЯ" data-price="590">
+                            <span>В КОРЗИНУ</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Карточка 2 -->
+            <div class="product-card" data-category="meat">
+                <div class="product-image">
+                    <img src="https://images.unsplash.com/photo-1593560708920-61dd98c46a4e?w=400&h=300&fit=crop" alt="Пицца Пепперони">
+                    <div class="product-badge badge-meat">С МЯСОМ</div>
+                </div>
+                <div class="product-info">
+                    <h3 class="product-name">ПАРМА</h3>
+                    <p class="product-description">Ветчина парма, моцарелла, пармезан, руккола, томаты</p>
+                    <div class="product-footer">
+                        <span class="product-price">750 ₽</span>
+                        <button class="add-btn" data-id="2" data-name="ПАРМА" data-price="750">
+                            <span>В КОРЗИНУ</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Карточка 3 -->
+            <div class="product-card" data-category="vegetarian">
+                <div class="product-image">
+                    <img src="https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&h=300&fit=crop" alt="Пицца Вегетарианская">
+                    <div class="product-badge badge-vegetarian">БЕЗ МЯСА</div>
+                </div>
+                <div class="product-info">
+                    <h3 class="product-name">ТОСКАНА</h3>
+                    <p class="product-description">Грибы, артишоки, оливки, моцарелла, вяленые томаты</p>
+                    <div class="product-footer">
+                        <span class="product-price">520 ₽</span>
+                        <button class="add-btn" data-id="3" data-name="ТОСКАНА" data-price="520">
+                            <span>В КОРЗИНУ</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Карточка 4 -->
+            <div class="product-card" data-category="spicy">
+                <div class="product-image">
+                    <img src="https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?w=400&h=300&fit=crop" alt="Пицца Острая">
+                    <div class="product-badge badge-spicy">ОСТРАЯ</div>
+                    <div class="product-badge badge-new">NEW</div>
+                </div>
+                <div class="product-info">
+                    <h3 class="product-name">НАПОЛИ</h3>
+                    <p class="product-description">Салями пикантная, халапеньо, моцарелла, острый соус</p>
+                    <div class="product-footer">
+                        <span class="product-price">640 ₽</span>
+                        <button class="add-btn" data-id="4" data-name="НАПОЛИ" data-price="640">
+                            <span>В КОРЗИНУ</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Карточка 5 -->
+            <div class="product-card" data-category="meat">
+                <div class="product-image">
+                    <img src="https://images.unsplash.com/photo-1604382354936-07c5d9983bd3?w=400&h=300&fit=crop" alt="Пицца Четыре сыра">
+                    <div class="product-badge badge-meat">С МЯСОМ</div>
+                </div>
+                <div class="product-info">
+                    <h3 class="product-name">БОВА</h3>
+                    <p class="product-description">Чоризо, моцарелла, гауда, пармезан, медовая горчица</p>
+                    <div class="product-footer">
+                        <span class="product-price">680 ₽</span>
+                        <button class="add-btn" data-id="5" data-name="БОВА" data-price="680">
+                            <span>В КОРЗИНУ</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Карточка 6 -->
+            <div class="product-card" data-category="vegetarian">
+                <div class="product-image">
+                    <img src="https://images.unsplash.com/photo-1513104890138-7c749659a591?w=400&h=300&fit=crop" alt="Пицца Маргарита">
+                    <div class="product-badge badge-vegetarian">БЕЗ МЯСА</div>
+                    <div class="product-badge badge-hit">ХИТ</div>
+                </div>
+                <div class="product-info">
+                    <h3 class="product-name">ФЛОРЕНЦИЯ</h3>
+                    <p class="product-description">Моцарелла, томаты, базилик, оливковое масло, чеснок</p>
+                    <div class="product-footer">
+                        <span class="product-price">480 ₽</span>
+                        <button class="add-btn" data-id="6" data-name="ФЛОРЕНЦИЯ" data-price="480">
+                            <span>В КОРЗИНУ</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Секция преимуществ -->
+    <section class="features" id="about">
+        <div class="features-container">
+            <div class="feature-item">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"></path>
+                        <path d="M12 6v6l4 2"></path>
+                    </svg>
+                </div>
+                <h3 class="feature-title">90 СЕКУНД</h3>
+                <p class="feature-text">Время приготовления в дровяной печи</p>
+            </div>
+            <div class="feature-item">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+                        <path d="M2 17l10 5 10-5"></path>
+                        <path d="M2 12l10 5 10-5"></path>
+                    </svg>
+                </div>
+                <h3 class="feature-title">3 ДНЯ</h3>
+                <p class="feature-text">Выдержка теста при низкой температуре</p>
+            </div>
+            <div class="feature-item">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <path d="M12 6v6l4 2"></path>
+                    </svg>
+                </div>
+                <h3 class="feature-title">450°C</h3>
+                <p class="feature-text">Температура в сердце печи</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Контакты и карта -->
+    <section class="contacts" id="contacts">
+        <div class="contacts-container">
+            <div class="contacts-info">
+                <div class="menu-header">
+                    <span class="menu-number">02</span>
+                    <h2 class="menu-title">НАЙТИ ОЧАГ</h2>
+                    <div class="menu-line"></div>
+                </div>
+                <div class="contact-item">
+                    <span class="contact-label">АДРЕС</span>
+                    <p class="contact-value">г. Москва, ул. Покровка, 47/24</p>
+                </div>
+                <div class="contact-item">
+                    <span class="contact-label">ВРЕМЯ РАБОТЫ</span>
+                    <p class="contact-value">Ежедневно с 12:00 до 23:00</p>
+                </div>
+                <div class="contact-item">
+                    <span class="contact-label">ТЕЛЕФОН</span>
+                    <p class="contact-value">+7 (495) 123-45-67</p>
+                </div>
+            </div>
+            <div class="map-container">
+                <div class="map" id="map">
+                    <div class="map-marker">
+                        <div class="marker-pin"></div>
+                        <div class="marker-pulse"></div>
+                    </div>
+                    <div class="map-text">г. Москва, ул. Покровка, 47/24</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Футер -->
+    <footer class="footer">
+        <div class="footer-container">
+            <div class="footer-logo">
+                <span class="logo-fire">&#9679;</span>
+                <span class="logo-text">ОЧАГЪ</span>
+            </div>
+            <p class="footer-text">Дровяная пицца по-неаполитански</p>
+            <div class="footer-social">
+                <a href="#" class="social-link">TG</a>
+                <a href="#" class="social-link">VK</a>
+                <a href="#" class="social-link">WA</a>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Корзина -->
+    <div class="cart-overlay" id="cartOverlay"></div>
+    <div class="cart-sidebar" id="cartSidebar">
+        <div class="cart-header">
+            <h2 class="cart-title">ВАШ ЗАКАЗ</h2>
+            <button class="cart-close" id="cartClose">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 6L6 18M6 6l12 12"></path>
+                </svg>
+            </button>
+        </div>
+        <div class="cart-items" id="cartItems">
+            <div class="cart-empty">
+                <p>Корзина пуста</p>
+                <span>Добавьте пиццу из меню</span>
+            </div>
+        </div>
+        <div class="cart-footer">
+            <div class="cart-total">
+                <span>ИТОГО</span>
+                <span class="total-price" id="totalPrice">0 ₽</span>
+            </div>
+            <button class="checkout-btn" id="checkoutBtn">ОФОРМИТЬ ЗАКАЗ</button>
+        </div>
+    </div>
+
+    <!-- Уведомление о добавлении -->
+    <div class="toast" id="toast">
+        <span class="toast-text">Добавлено в корзину</span>
+    </div>
+
+    <script src="pizza17.js"></script>
+</body>
+</html>

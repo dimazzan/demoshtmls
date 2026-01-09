@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FLAME & CRUST | Настоящая пицца на дровах</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700;900&family=Oswald:wght@500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --color-fire: #FF4D00;
+            --color-charcoal: #121212;
+            --color-ash: #2A2A2A;
+        }
+        body {
+            background-color: var(--color-charcoal);
+            color: #EAEAEA;
+            font-family: 'Montserrat', sans-serif;
+            scroll-behavior: smooth;
+        }
+        h1, h2, h3, .font-oswald {
+            font-family: 'Oswald', sans-serif;
+            text-transform: uppercase;
+        }
+        .pizza-card {
+            transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            background: linear-gradient(145deg, #1a1a1a, #222222);
+            border: 1px solid #333;
+        }
+        .pizza-card:hover {
+            transform: translateY(-10px);
+            border-color: var(--color-fire);
+        }
+        .btn-fire {
+            background-color: var(--color-fire);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        .btn-fire:hover {
+            box-shadow: 0 0 20px rgba(255, 77, 0, 0.6);
+            transform: scale(1.05);
+        }
+        .cart-panel {
+            transition: transform 0.5s cubic-bezier(0.77, 0, 0.175, 1);
+            background: rgba(18, 18, 18, 0.98);
+            backdrop-filter: blur(10px);
+        }
+        .hero-gradient {
+            background: linear-gradient(to bottom, rgba(0,0,0,0.3), rgba(18,18,18,1)), url('https://images.unsplash.com/photo-1541745537411-b8046dc6d66c?q=80&w=1974&auto=format&fit=crop');
+            background-size: cover;
+            background-position: center;
+        }
+        .fire-text {
+            color: var(--color-fire);
+            text-shadow: 0 0 10px rgba(255, 77, 0, 0.3);
+        }
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #121212;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #333;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--color-fire);
+        }
+        .badge {
+            background: var(--color-fire);
+            color: white;
+            font-size: 0.7rem;
+            padding: 2px 6px;
+            border-radius: 50%;
+        }
+    </style>
+</head>
+<body class="overflow-x-hidden">
+
+    <!-- Header -->
+    <header class="fixed top-0 left-0 right-0 z-50 bg-black/80 backdrop-blur-md border-b border-white/5">
+        <div class="container mx-auto px-4 py-4 flex justify-between items-center">
+            <div class="text-2xl font-black tracking-tighter italic">
+                FLAME<span class="fire-text">&</span>CRUST
+            </div>
+            <nav class="hidden md:flex space-x-8 font-oswald text-sm tracking-widest">
+                <a href="#menu" class="hover:text-[#FF4D00] transition">МЕНЮ</a>
+                <a href="#about" class="hover:text-[#FF4D00] transition">О НАС</a>
+                <a href="#delivery" class="hover:text-[#FF4D00] transition">ДОСТАВКА</a>
+            </nav>
+            <div class="relative cursor-pointer" onclick="toggleCart()">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 hover:text-[#FF4D00] transition" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
+                </svg>
+                <span id="cart-count" class="absolute -top-1 -right-1 badge">0</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="h-screen flex items-center justify-center hero-gradient relative">
+        <div class="container mx-auto px-4 text-center z-10">
+            <h1 class="text-6xl md:text-8xl font-black mb-4 leading-none">ЖАР <span class="fire-text">НАСТОЯЩЕГО</span><br>ОГНЯ</h1>
+            <p class="text-xl md:text-2xl mb-8 max-w-2xl mx-auto font-light text-gray-300">Пицца на тонком тесте, приготовленная в дровяной печи при 450°C. Хрустящая корочка, подкопченный аромат.</p>
+            <a href="#menu" class="btn-fire px-10 py-4 inline-block font-oswald text-lg tracking-widest">ВЫБРАТЬ ПИЦЦУ</a>
+        </div>
+        <div class="absolute bottom-10 left-1/2 -translate-x-1/2 animate-bounce">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+            </svg>
+        </div>
+    </section>
+
+    <!-- Menu Section -->
+    <section id="menu" class="py-24 bg-[#0a0a0a]">
+        <div class="container mx-auto px-4">
+            <div class="flex flex-col md:flex-row justify-between items-end mb-16 border-l-4 border-[#FF4D00] pl-6">
+                <div>
+                    <h2 class="text-5xl font-black mb-2">МЕНЮ</h2>
+                    <p class="text-gray-500 font-oswald tracking-widest">HANDMADE CRAFT PIZZA</p>
+                </div>
+                <div class="mt-4 md:mt-0">
+                    <div class="flex space-x-4 text-sm font-oswald tracking-widest text-gray-400">
+                        <button class="text-[#FF4D00] border-b border-[#FF4D00]">КЛАССИКА</button>
+                        <button class="hover:text-white transition">ФИРМЕННЫЕ</button>
+                        <button class="hover:text-white transition">ОСТРЫЕ</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8" id="pizza-container">
+                <!-- Pizza cards injected via JS -->
+            </div>
+        </div>
+    </section>
+
+    <!-- Cart Sidebar -->
+    <div id="cart-sidebar" class="fixed top-0 right-0 h-full w-full md:w-[450px] cart-panel z-[100] translate-x-full shadow-2xl flex flex-col">
+        <div class="p-6 border-b border-white/10 flex justify-between items-center">
+            <h2 class="text-2xl font-black font-oswald tracking-tighter">ВАШ ЗАКАЗ</h2>
+            <button onclick="toggleCart()" class="text-gray-500 hover:text-white transition text-3xl">&times;</button>
+        </div>
+        
+        <div id="cart-items" class="flex-grow overflow-y-auto p-6 space-y-6">
+            <!-- Items injected via JS -->
+            <div class="text-center text-gray-500 mt-20 font-light italic">Пока что тут пусто... Самое время добавить жару!</div>
+        </div>
+
+        <div class="p-6 border-t border-white/10 bg-black/40">
+            <div class="flex justify-between items-center mb-6">
+                <span class="text-gray-400 font-oswald tracking-widest">ИТОГО:</span>
+                <span id="cart-total" class="text-3xl font-black">0 ₽</span>
+            </div>
+            <button onclick="openCheckout()" class="w-full btn-fire py-4 font-oswald text-lg tracking-widest">ОФОРМИТЬ ЗАКАЗ</button>
+        </div>
+    </div>
+
+    <!-- Checkout Modal -->
+    <div id="checkout-modal" class="fixed inset-0 z-[110] bg-black/90 hidden items-center justify-center p-4 backdrop-blur-sm">
+        <div class="bg-[#1a1a1a] p-8 max-w-md w-full border border-white/10 relative">
+            <button onclick="closeCheckout()" class="absolute top-4 right-4 text-gray-500 hover:text-white">&times;</button>
+            <h2 class="text-3xl font-black font-oswald mb-6">КУДА ДОСТАВИТЬ?</h2>
+            <form id="order-form" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-oswald text-gray-500 mb-1">ИМЯ</label>
+                    <input type="text" required class="w-full bg-[#222] border border-[#333] p-3 focus:border-[#FF4D00] outline-none transition">
+                </div>
+                <div>
+                    <label class="block text-xs font-oswald text-gray-500 mb-1">ТЕЛЕФОН</label>
+                    <input type="tel" required class="w-full bg-[#222] border border-[#333] p-3 focus:border-[#FF4D00] outline-none transition">
+                </div>
+                <div>
+                    <label class="block text-xs font-oswald text-gray-500 mb-1">АДРЕС</label>
+                    <textarea required class="w-full bg-[#222] border border-[#333] p-3 focus:border-[#FF4D00] outline-none transition h-24"></textarea>
+                </div>
+                <button type="submit" class="w-full btn-fire py-4 font-oswald text-lg tracking-widest mt-4">ПОДТВЕРДИТЬ</button>
+            </form>
+        </div>
+    </div>
+
+    <footer class="bg-black py-12 border-t border-white/5">
+        <div class="container mx-auto px-4 text-center">
+            <div class="text-3xl font-black italic mb-6">FLAME<span class="fire-text">&</span>CRUST</div>
+            <p class="text-gray-500 text-sm max-w-md mx-auto mb-8">Мы уважаем традиции. Только дровяная печь, только свежие фермерские продукты и никакого компромисса в качестве.</p>
+            <div class="flex justify-center space-x-6">
+                <a href="#" class="text-gray-400 hover:text-[#FF4D00]">Instagram</a>
+                <a href="#" class="text-gray-400 hover:text-[#FF4D00]">Telegram</a>
+                <a href="#" class="text-gray-400 hover:text-[#FF4D00]">VK</a>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        const pizzas = [
+            {
+                id: 1,
+                name: "Маргарита на углях",
+                price: 590,
+                desc: "Классика с томатами Сан-Марцано, моцареллой фиор ди латте и свежим базиликом.",
+                img: "https://images.unsplash.com/photo-1574071318508-1cdbad80ad38?q=80&w=1000&auto=format&fit=crop"
+            },
+            {
+                id: 2,
+                name: "Дьявола",
+                price: 750,
+                desc: "Острая салями калабрия, чили, моцарелла и красный лук. Для тех, кто любит погорячее.",
+                img: "https://images.unsplash.com/photo-1534308983496-4fabb1a015ee?q=80&w=1000&auto=format&fit=crop"
+            },
+            {
+                id: 3,
+                name: "Четыре сыра & Дым",
+                price: 820,
+                desc: "Горгонзола, пармезан, моцарелла и копченый скаморца. Настоящий сырный взрыв.",
+                img: "https://images.unsplash.com/photo-1513104890138-7c749659a591?q=80&w=1000&auto=format&fit=crop"
+            },
+            {
+                id: 4,
+                name: "Мясной крафт",
+                price: 890,
+                desc: "Бекон, пепперони, ростбиф и копченая курица. Мужской выбор.",
+                img: "https://images.unsplash.com/photo-1571407970349-bc81e7e96d47?q=80&w=1000&auto=format&fit=crop"
+            },
+            {
+                id: 5,
+                name: "Груша и Горгонзола",
+                price: 780,
+                desc: "Сладкая груша, терпкая горгонзола, грецкие орехи и капля цветочного меда.",
+                img: "https://images.unsplash.com/photo-1593560708920-61dd98c46a4e?q=80&w=1000&auto=format&fit=crop"
+            },
+            {
+                id: 6,
+                name: "Трюфельный лес",
+                price: 950,
+                desc: "Шампиньоны, вешенки, трюфельное масло и соус бешамель.",
+                img: "https://images.unsplash.com/photo-1590947132387-155cc02f3212?q=80&w=1000&auto=format&fit=crop"
+            }
+        ];
+
+        let cart = [];
+
+        function initMenu() {
+            const container = document.getElementById('pizza-container');
+            container.innerHTML = pizzas.map(pizza => `
+                <div class="pizza-card overflow-hidden group">
+                    <div class="relative overflow-hidden h-64">
+                        <img src="${pizza.img}" alt="${pizza.name}" class="w-full h-full object-cover transition duration-500 group-hover:scale-110 grayscale hover:grayscale-0">
+                        <div class="absolute top-4 right-4 bg-black/70 backdrop-blur-md px-3 py-1 font-oswald text-[#FF4D00]">
+                            ${pizza.price} ₽
+                        </div>
+                    </div>
+                    <div class="p-6">
+                        <h3 class="text-xl font-bold mb-2">${pizza.name}</h3>
+                        <p class="text-gray-400 text-sm mb-6 h-12 overflow-hidden">${pizza.desc}</p>
+                        <button onclick="addToCart(${pizza.id})" class="w-full border border-white/20 py-3 font-oswald tracking-widest hover:bg-white hover:text-black transition uppercase text-sm">В корзину</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function toggleCart() {
+            const sidebar = document.getElementById('cart-sidebar');
+            sidebar.classList.toggle('translate-x-full');
+        }
+
+        function addToCart(id) {
+            const pizza = pizzas.find(p => p.id === id);
+            const itemInCart = cart.find(item => item.id === id);
+            
+            if (itemInCart) {
+                itemInCart.quantity++;
+            } else {
+                cart.push({...pizza, quantity: 1});
+            }
+            
+            updateCart();
+            // Show feedback
+            const cartBtn = document.querySelector(`[onclick="addToCart(${id})"]`);
+            const originalText = cartBtn.innerText;
+            cartBtn.innerText = "ДОБАВЛЕНО!";
+            cartBtn.classList.add('border-[#FF4D00]', 'text-[#FF4D00]');
+            setTimeout(() => {
+                cartBtn.innerText = originalText;
+                cartBtn.classList.remove('border-[#FF4D00]', 'text-[#FF4D00]');
+            }, 1000);
+        }
+
+        function removeFromCart(id) {
+            cart = cart.filter(item => item.id !== id);
+            updateCart();
+        }
+
+        function updateQuantity(id, delta) {
+            const item = cart.find(i => i.id === id);
+            if (item) {
+                item.quantity += delta;
+                if (item.quantity <= 0) {
+                    removeFromCart(id);
+                } else {
+                    updateCart();
+                }
+            }
+        }
+
+        function updateCart() {
+            const cartItems = document.getElementById('cart-items');
+            const cartCount = document.getElementById('cart-count');
+            const cartTotal = document.getElementById('cart-total');
+            
+            if (cart.length === 0) {
+                cartItems.innerHTML = `<div class="text-center text-gray-500 mt-20 font-light italic">Пока что тут пусто... Самое время добавить жару!</div>`;
+                cartCount.innerText = '0';
+                cartTotal.innerText = '0 ₽';
+                return;
+            }
+
+            let total = 0;
+            let count = 0;
+
+            cartItems.innerHTML = cart.map(item => {
+                total += item.price * item.quantity;
+                count += item.quantity;
+                return `
+                    <div class="flex space-x-4 border-b border-white/5 pb-4">
+                        <img src="${item.img}" class="w-20 h-20 object-cover grayscale hover:grayscale-0 transition">
+                        <div class="flex-grow">
+                            <h4 class="font-oswald text-sm tracking-wide mb-1">${item.name}</h4>
+                            <div class="flex items-center space-x-3">
+                                <button onclick="updateQuantity(${item.id}, -1)" class="text-gray-500 hover:text-white">-</button>
+                                <span class="font-bold">${item.quantity}</span>
+                                <button onclick="updateQuantity(${item.id}, 1)" class="text-gray-500 hover:text-white">+</button>
+                                <span class="text-[#FF4D00] ml-auto font-oswald">${item.price * item.quantity} ₽</span>
+                            </div>
+                        </div>
+                        <button onclick="removeFromCart(${item.id})" class="text-gray-700 hover:text-red-500">&times;</button>
+                    </div>
+                `;
+            }).join('');
+
+            cartCount.innerText = count;
+            cartTotal.innerText = `${total} ₽`;
+        }
+
+        function openCheckout() {
+            if (cart.length === 0) return alert('Корзина пуста!');
+            document.getElementById('checkout-modal').classList.remove('hidden');
+            document.getElementById('checkout-modal').classList.add('flex');
+        }
+
+        function closeCheckout() {
+            document.getElementById('checkout-modal').classList.add('hidden');
+            document.getElementById('checkout-modal').classList.remove('flex');
+        }
+
+        document.getElementById('order-form').onsubmit = (e) => {
+            e.preventDefault();
+            alert('Заказ принят! Начинаем разогревать печь.');
+            cart = [];
+            updateCart();
+            closeCheckout();
+            toggleCart();
+        };
+
+        // Initialize
+        initMenu();
+    </script>
+</body>
+</html>

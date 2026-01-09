@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WOOD & FIRE | PIZZA DOJO</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&family=Oswald:wght@400;600&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0a0a0a;
+            --card-bg: #141414;
+            --text-primary: #f0f0f0;
+            --text-secondary: #888;
+            --accent-red: #D93025; /* "Lacquered Red" */
+            --accent-gold: #C6A87C;
+            --border-color: #333;
+            --grid-gap: 1px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            font-family: 'Space Mono', monospace;
+            overflow-x: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        h1, h2, h3, .price {
+            font-family: 'Oswald', sans-serif;
+            text-transform: uppercase;
+        }
+
+        /* --- LAYOUT & HEADER --- */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 30px 0;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 40px;
+            position: relative;
+        }
+
+        .logo {
+            font-size: 2rem;
+            letter-spacing: -1px;
+            font-weight: 700;
+            color: var(--text-primary);
+            position: relative;
+            z-index: 2;
+        }
+
+        .logo span {
+            color: var(--accent-red);
+        }
+
+        .jp-subtitle {
+            font-family: 'Noto Sans JP', sans-serif;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            writing-mode: vertical-rl;
+            position: absolute;
+            left: -10px;
+            top: 5px;
+            opacity: 0.5;
+        }
+
+        /* --- HERO SECTION --- */
+        .hero {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 40px;
+            margin-bottom: 60px;
+            align-items: end;
+        }
+
+        .hero-text h1 {
+            font-size: clamp(3rem, 8vw, 6rem);
+            line-height: 0.9;
+            margin-bottom: 20px;
+        }
+
+        .hero-desc {
+            border-left: 2px solid var(--accent-red);
+            padding-left: 20px;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            max-width: 400px;
+        }
+
+        /* --- MENU GRID (Asian Brutalism) --- */
+        .menu-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 1px;
+            background-color: var(--border-color); /* Creates the borders */
+            border: 1px solid var(--border-color);
+        }
+
+        .product-card {
+            background-color: var(--card-bg);
+            padding: 20px;
+            position: relative;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            min-height: 500px;
+        }
+
+        .product-card:hover {
+            background-color: #1a1a1a;
+        }
+
+        /* Image styling mimicking magazine crop */
+        .card-img-wrapper {
+            width: 100%;
+            height: 250px;
+            position: relative;
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+
+        .product-card img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.5s ease;
+            filter: grayscale(20%) contrast(110%);
+        }
+
+        .product-card:hover img {
+            transform: scale(1.05);
+            filter: grayscale(0%) contrast(120%);
+        }
+
+        /* Badges */
+        .badges {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            z-index: 2;
+        }
+
+        .badge {
+            font-size: 0.7rem;
+            padding: 4px 8px;
+            border: 1px solid var(--text-primary);
+            background: rgba(0,0,0,0.8);
+            text-transform: uppercase;
+            backdrop-filter: blur(4px);
+        }
+
+        .badge.spicy {
+            border-color: var(--accent-red);
+            color: var(--accent-red);
+        }
+
+        .badge.meat {
+            border-color: var(--accent-gold);
+            color: var(--accent-gold);
+        }
+
+        /* Card Content */
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #333;
+        }
+
+        .product-name {
+            font-size: 1.5rem;
+            font-weight: 600;
+            line-height: 1;
+        }
+
+        .product-jp {
+            font-family: 'Noto Sans JP', sans-serif;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            display: block;
+            margin-top: 5px;
+        }
+
+        .product-desc {
+            font-size: 0.85rem;
+            color: #aaa;
+            margin-bottom: 20px;
+            line-height: 1.6;
+            flex-grow: 1;
+        }
+
+        .specs {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-bottom: 20px;
+            border-top: 1px dotted #333;
+            padding-top: 10px;
+        }
+
+        .specs div span {
+            color: var(--text-primary);
+        }
+
+        /* Controls */
+        .card-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .price {
+            font-size: 1.8rem;
+            color: var(--accent-gold);
+        }
+
+        .add-btn {
+            background: transparent;
+            border: 1px solid var(--text-primary);
+            color: var(--text-primary);
+            padding: 10px 20px;
+            cursor: pointer;
+            font-family: 'Space Mono', monospace;
+            text-transform: uppercase;
+            font-weight: 700;
+            transition: all 0.2s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .add-btn::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 0%;
+            height: 100%;
+            background-color: var(--text-primary);
+            transition: width 0.2s ease-in-out;
+            z-index: -1;
+        }
+
+        .add-btn:hover {
+            color: var(--bg-color);
+        }
+
+        .add-btn:hover::after {
+            width: 100%;
+        }
+
+        /* --- CART SIDEBAR (Drawer) --- */
+        .cart-toggle {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: var(--accent-red);
+            color: white;
+            width: 70px;
+            height: 70px;
+            border-radius: 0; /* Square for brutalism */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            z-index: 100;
+            box-shadow: 0 10px 30px rgba(217, 48, 37, 0.3);
+            border: 1px solid white;
+        }
+
+        .cart-count {
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            background: white;
+            color: black;
+            font-size: 12px;
+            padding: 2px 6px;
+            font-weight: bold;
+        }
+
+        .cart-drawer {
+            position: fixed;
+            top: 0;
+            right: -450px;
+            width: 400px;
+            height: 100vh;
+            background: #111;
+            border-left: 1px solid var(--border-color);
+            z-index: 99;
+            transition: right 0.4s cubic-bezier(0.19, 1, 0.22, 1);
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .cart-drawer.open {
+            right: 0;
+        }
+
+        .cart-header {
+            font-family: 'Oswald', sans-serif;
+            font-size: 2rem;
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .close-cart {
+            cursor: pointer;
+            font-size: 1.5rem;
+        }
+
+        .cart-items {
+            flex-grow: 1;
+            overflow-y: auto;
+        }
+
+        .cart-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 0;
+            border-bottom: 1px solid #333;
+        }
+
+        .cart-item-info h4 {
+            font-size: 1rem;
+            margin-bottom: 5px;
+        }
+
+        .cart-item-price {
+            color: var(--accent-gold);
+            font-size: 0.9rem;
+        }
+
+        .remove-item {
+            color: #555;
+            cursor: pointer;
+            font-size: 1.2rem;
+            padding: 5px;
+        }
+        
+        .remove-item:hover {
+            color: var(--accent-red);
+        }
+
+        .cart-total {
+            margin-top: 20px;
+            border-top: 2px solid var(--text-primary);
+            padding-top: 20px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 1.5rem;
+            font-family: 'Oswald', sans-serif;
+        }
+
+        .checkout-btn {
+            width: 100%;
+            background: var(--text-primary);
+            color: var(--bg-color);
+            border: none;
+            padding: 20px;
+            font-family: 'Space Mono', monospace;
+            font-weight: 700;
+            font-size: 1.1rem;
+            margin-top: 20px;
+            cursor: pointer;
+            text-transform: uppercase;
+        }
+        
+        .checkout-btn:hover {
+            background: var(--accent-gold);
+        }
+
+        /* --- MAP SECTION --- */
+        .map-section {
+            margin-top: 80px;
+            border-top: 1px solid var(--border-color);
+            padding-top: 40px;
+            padding-bottom: 80px;
+        }
+        
+        .map-container {
+            width: 100%;
+            height: 400px;
+            background-color: #222;
+            filter: grayscale(100%) invert(92%) contrast(83%); /* Stylized map */
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Fake Map Overlay for Style */
+        .map-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: black;
+            font-weight: bold;
+            z-index: 10;
+            text-align: center;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero {
+                grid-template-columns: 1fr;
+            }
+            
+            .cart-drawer {
+                width: 100%;
+                right: -100%;
+            }
+            
+            h1 {
+                font-size: 3rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <div class="logo">
+            <span class="jp-subtitle">ウッドファイア</span>
+            FIRE<span>.</span>WOOD
+        </div>
+        <nav style="font-size: 0.9rem; letter-spacing: 1px;">
+            INFO / [01] MENU / [02] LOCATIONS
+        </nav>
+    </header>
+
+    <section class="hero">
+        <div class="hero-text">
+            <h1>Primitive<br><span style="color: var(--accent-red)">Heat</span> Technology</h1>
+        </div>
+        <div class="hero-desc">
+            <p>Дровяная печь. Температура 480°C. Тесто 72 часа ферментации. Никаких компромиссов. Вкус, который пробуждает инстинкты.</p>
+        </div>
+    </section>
+
+    <div class="menu-grid" id="catalog">
+        <!-- Generated by JS -->
+    </div>
+
+    <section class="map-section">
+        <h2 style="margin-bottom: 20px; font-size: 2rem;">Location <span style="font-family: 'Noto Sans JP'; font-size: 1rem; color: #666;">位置</span></h2>
+        <div class="map-container">
+            <iframe src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d2229.833878076939!2d39.89152631604996!3d59.21980323204961!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x46adf4e005555555%3A0x5555555555555555!2sVologda!5e0!3m2!1sen!2sru!4v1650000000000!5m2!1sen!2sru" width="100%" height="100%" style="border:0;" allowfullscreen="" loading="lazy"></iframe>
+        </div>
+        <div style="margin-top: 20px; display: flex; justify-content: space-between; border-top: 1px solid #333; padding-top: 10px;">
+            <span>VOLOGDA, CENTRAL DISTRICT</span>
+            <span>OPEN 10:00 - 23:00</span>
+        </div>
+    </section>
+</div>
+
+<!-- Cart Sidebar -->
+<div class="cart-toggle" onclick="toggleCart()">
+    🛒 <span class="cart-count" id="cartCount">0</span>
+</div>
+
+<div class="cart-drawer" id="cartDrawer">
+    <div class="cart-header">
+        <span>CART</span>
+        <span class="close-cart" onclick="toggleCart()">✕</span>
+    </div>
+    <div class="cart-items" id="cartItems">
+        <!-- Cart Items Go Here -->
+        <div style="text-align: center; color: #555; margin-top: 50px;">BASKET IS EMPTY</div>
+    </div>
+    <div>
+        <div class="cart-total">
+            <span>TOTAL</span>
+            <span id="cartTotal">0 ₽</span>
+        </div>
+        <button class="checkout-btn">Confirm Order</button>
+    </div>
+</div>
+
+<script>
+    // Data with Asian/Tech vibes
+    const pizzas = [
+        {
+            id: 1,
+            name: "YAKUZA CHICKEN",
+            jp: "ヤクザチキン",
+            desc: "Копченая курица, терияки, кунжут, моцарелла, зеленый лук. Сладкий и опасный.",
+            price: 890,
+            image: "https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80",
+            badges: ["meat", "sweet"],
+            weight: "480g",
+            kcal: "1240"
+        },
+        {
+            id: 2,
+            name: "RED DEVIL",
+            jp: "赤い悪魔",
+            desc: "Пепперони, чили перец, чоризо, томатный соус. Острая, как характер шефа.",
+            price: 950,
+            image: "https://images.unsplash.com/photo-1628840042765-356cda07504e?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80",
+            badges: ["spicy", "hit"],
+            weight: "510g",
+            kcal: "1350"
+        },
+        {
+            id: 3,
+            name: "FOREST GOLD",
+            jp: "森の金",
+            desc: "Белые грибы, трюфельное масло, сливочный соус, тимьян. Без мяса, но с характером.",
+            price: 1100,
+            image: "https://images.unsplash.com/photo-1513104890138-7c749659a591?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80",
+            badges: ["veg", "gourmet"],
+            weight: "460g",
+            kcal: "1100"
+        },
+        {
+            id: 4,
+            name: "CHEESE REACTOR",
+            jp: "チーズ炉",
+            desc: "Горгонзола, моцарелла, пармезан, чеддер, мед, грецкий орех. Критическая масса вкуса.",
+            price: 990,
+            image: "https://images.unsplash.com/photo-1573821663912-6df460f9c684?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80",
+            badges: ["veg", "rich"],
+            weight: "500g",
+            kcal: "1450"
+        },
+        {
+            id: 5,
+            name: "BLACK SEA",
+            jp: "黒海",
+            desc: "Чернила каракатицы в тесте, креветки, кальмары, каперсы. Глубокое погружение.",
+            price: 1250,
+            image: "https://images.unsplash.com/photo-1565299507177-b0ac66763828?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80",
+            badges: ["seafood", "exotic"],
+            weight: "490g",
+            kcal: "1050"
+        },
+        {
+            id: 6,
+            name: "BEEF TATAKI",
+            jp: "牛肉のタタキ",
+            desc: "Рваная говядина, красный лук, барбекю соус, кинза. Чистый протеин.",
+            price: 1150,
+            image: "https://images.unsplash.com/photo-1604382355076-af4b0eb60143?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80",
+            badges: ["meat", "protein"],
+            weight: "550g",
+            kcal: "1500"
+        }
+    ];
+
+    let cart = [];
+
+    // Render Catalog
+    const catalogEl = document.getElementById('catalog');
+    
+    pizzas.forEach(pizza => {
+        const badgesHtml = pizza.badges.map(b => {
+            let className = 'badge';
+            if(['spicy', 'hit'].includes(b)) className += ' spicy';
+            if(['meat', 'seafood'].includes(b)) className += ' meat';
+            return `<span class="${className}">${b}</span>`;
+        }).join('');
+
+        const card = document.createElement('div');
+        card.className = 'product-card';
+        card.innerHTML = `
+            <div class="badges">${badgesHtml}</div>
+            <div class="card-img-wrapper">
+                <img src="${pizza.image}" alt="${pizza.name}">
+            </div>
+            <div>
+                <div class="card-header">
+                    <div>
+                        <div class="product-name">${pizza.name}</div>
+                        <span class="product-jp">${pizza.jp}</span>
+                    </div>
+                </div>
+                <div class="specs">
+                    <div>WT: <span>${pizza.weight}</span></div>
+                    <div>EN: <span>${pizza.kcal} kcal</span></div>
+                </div>
+                <p class="product-desc">${pizza.desc}</p>
+                <div class="card-footer">
+                    <div class="price">${pizza.price} ₽</div>
+                    <button class="add-btn" onclick="addToCart(${pizza.id})">ADD +</button>
+                </div>
+            </div>
+        `;
+        catalogEl.appendChild(card);
+    });
+
+    // Cart Logic
+    function addToCart(id) {
+        const item = pizzas.find(p => p.id === id);
+        cart.push(item);
+        updateCartUI();
+        
+        // Simple visual feedback
+        const btn = event.target;
+        const originalText = btn.innerText;
+        btn.innerText = "ADDED";
+        btn.style.background = "#fff";
+        btn.style.color = "#000";
+        setTimeout(() => {
+            btn.innerText = originalText;
+            btn.style.background = "transparent";
+            btn.style.color = "#f0f0f0";
+        }, 500);
+    }
+
+    function removeFromCart(index) {
+        cart.splice(index, 1);
+        updateCartUI();
+    }
+
+    function updateCartUI() {
+        const countEl = document.getElementById('cartCount');
+        const itemsEl = document.getElementById('cartItems');
+        const totalEl = document.getElementById('cartTotal');
+
+        countEl.innerText = cart.length;
+
+        let total = 0;
+        if(cart.length === 0) {
+            itemsEl.innerHTML = '<div style="text-align: center; color: #555; margin-top: 50px;">BASKET IS EMPTY</div>';
+        } else {
+            itemsEl.innerHTML = cart.map((item, index) => {
+                total += item.price;
+                return `
+                <div class="cart-item">
+                    <div class="cart-item-info">
+                        <h4>${item.name}</h4>
+                        <div class="cart-item-price">${item.price} ₽</div>
+                    </div>
+                    <div class="remove-item" onclick="removeFromCart(${index})">✕</div>
+                </div>
+                `;
+            }).join('');
+        }
+        
+        totalEl.innerText = total + " ₽";
+    }
+
+    function toggleCart() {
+        document.getElementById('cartDrawer').classList.toggle('open');
+    }
+</script>
+
+</body>
+</html>

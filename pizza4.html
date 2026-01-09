@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FLAME & DOUGH | Настоящая пицца на дровах</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;1,700&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f0f0f;
+            color: #f5f5f5;
+        }
+        h1, h2, h3, .font-serif {
+            font-family: 'Playfair Display', serif;
+        }
+        .pizza-card:hover img {
+            transform: scale(1.05);
+        }
+        .gradient-overlay {
+            background: linear-gradient(0deg, rgba(15,15,15,1) 0%, rgba(15,15,15,0) 100%);
+        }
+        [x-cloak] { display: none !important; }
+        .cart-bounce {
+            animation: bounce 0.5s cubic-bezier(0.36, 0, 0.66, -0.56) 0.1s;
+        }
+        @keyframes bounce {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+    </style>
+</head>
+<body x-data="pizzeriaApp()">
+
+    <!-- Header -->
+    <header class="fixed w-full z-50 bg-black/80 backdrop-blur-md border-b border-white/10">
+        <div class="container mx-auto px-4 py-4 flex justify-between items-center">
+            <div class="text-2xl font-bold tracking-tighter">
+                <span class="text-orange-600">FLAME</span>&DOUGH
+            </div>
+            
+            <nav class="hidden md:flex space-x-8 text-sm uppercase tracking-widest font-semibold">
+                <a href="#menu" class="hover:text-orange-500 transition">Меню</a>
+                <a href="#about" class="hover:text-orange-500 transition">О нас</a>
+                <a href="#delivery" class="hover:text-orange-500 transition">Доставка</a>
+            </nav>
+
+            <button @click="isCartOpen = true" class="relative p-2 hover:bg-white/10 rounded-full transition">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
+                </svg>
+                <span x-show="cart.length > 0" x-text="cartTotalItems" class="absolute -top-1 -right-1 bg-orange-600 text-white text-[10px] w-5 h-5 flex items-center justify-center rounded-full font-bold"></span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="relative h-screen flex items-center overflow-hidden">
+        <div class="absolute inset-0 z-0">
+            <img src="https://images.unsplash.com/photo-1541745537411-b8046dc6d66c?q=80&w=2000&auto=format&fit=crop" alt="Pizza Oven" class="w-full h-full object-cover opacity-60">
+            <div class="absolute inset-0 gradient-overlay"></div>
+        </div>
+        
+        <div class="container mx-auto px-4 z-10">
+            <div class="max-w-2xl">
+                <span class="text-orange-500 font-semibold tracking-widest uppercase mb-4 block">Традиции живого огня</span>
+                <h1 class="text-6xl md:text-8xl font-bold mb-6 leading-tight">Пицца с характером <br><span class="text-orange-600">дыма.</span></h1>
+                <p class="text-xl text-gray-300 mb-8 max-w-lg">Используем только дубовые дрова, муку из твердых сортов пшеницы и 48-часовую ферментацию теста.</p>
+                <a href="#menu" class="inline-block bg-orange-600 hover:bg-orange-700 text-white px-10 py-4 text-lg font-bold rounded-sm transition-all transform hover:-translate-y-1">Попробовать сейчас</a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Menu Section -->
+    <section id="menu" class="py-24 bg-[#0f0f0f]">
+        <div class="container mx-auto px-4">
+            <div class="text-center mb-16">
+                <h2 class="text-4xl md:text-5xl font-bold mb-4">Наше Меню</h2>
+                <div class="w-24 h-1 bg-orange-600 mx-auto"></div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-10">
+                <template x-for="pizza in pizzas" :key="pizza.id">
+                    <div class="pizza-card bg-[#1a1a1a] rounded-xl overflow-hidden shadow-2xl transition-all duration-500 border border-white/5 flex flex-col">
+                        <div class="relative overflow-hidden h-64">
+                            <img :src="pizza.image" :alt="pizza.name" class="w-full h-full object-cover transition-transform duration-700">
+                            <div class="absolute top-4 right-4 bg-black/60 backdrop-blur-md px-3 py-1 rounded text-orange-500 font-bold" x-text="pizza.price + ' ₽'"></div>
+                        </div>
+                        <div class="p-8 flex flex-col flex-grow">
+                            <h3 class="text-2xl font-bold mb-3" x-text="pizza.name"></h3>
+                            <p class="text-gray-400 text-sm mb-6 flex-grow" x-text="pizza.description"></p>
+                            <div class="flex items-center justify-between mt-auto">
+                                <div class="flex items-center space-x-2">
+                                    <span class="text-xs text-gray-500" x-text="pizza.weight + 'г'"></span>
+                                    <span class="w-1 h-1 bg-gray-600 rounded-full"></span>
+                                    <span class="text-xs text-gray-500" x-text="pizza.diameter + 'см'"></span>
+                                </div>
+                                <button @click="addToCart(pizza)" class="bg-white text-black px-6 py-2 rounded-full font-bold text-sm hover:bg-orange-600 hover:text-white transition-colors">
+                                    В корзину
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section (Psychology) -->
+    <section class="py-20 bg-zinc-900 border-y border-white/5">
+        <div class="container mx-auto px-4">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-12 text-center">
+                <div>
+                    <div class="text-orange-600 mb-4 flex justify-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.5-7 3 3 3.333 3.667 3.333 6 0 2.5-3 4.5-3 4.5s2.5-1 4.5-3c0 2.5-3 5.5-3 8.5z" />
+                        </svg>
+                    </div>
+                    <h4 class="text-xl font-bold mb-2">Настоящий огонь</h4>
+                    <p class="text-gray-400">Печь разогревается до 450°C. Пицца готовится за 90 секунд, сохраняя сочность начинки.</p>
+                </div>
+                <div>
+                    <div class="text-orange-600 mb-4 flex justify-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+                        </svg>
+                    </div>
+                    <h4 class="text-xl font-bold mb-2">Фермерские продукты</h4>
+                    <p class="text-gray-400">Моцарелла из цельного молока и томаты Сан-Марцано. Никаких компромиссов в качестве.</p>
+                </div>
+                <div>
+                    <div class="text-orange-600 mb-4 flex justify-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                    </div>
+                    <h4 class="text-xl font-bold mb-2">Быстрая доставка</h4>
+                    <p class="text-gray-400">Собственная курьерская служба доставит пиццу горячей в течение 45 минут.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="py-12 border-t border-white/10 bg-black">
+        <div class="container mx-auto px-4 text-center">
+            <div class="text-2xl font-bold tracking-tighter mb-8">
+                <span class="text-orange-600">FLAME</span>&DOUGH
+            </div>
+            <div class="flex justify-center space-x-6 mb-8 text-gray-400">
+                <a href="#" class="hover:text-white transition">Instagram</a>
+                <a href="#" class="hover:text-white transition">Telegram</a>
+                <a href="#" class="hover:text-white transition">VK</a>
+            </div>
+            <p class="text-gray-600 text-sm">© 2023 FLAME&DOUGH. Все права защищены. Адрес: Ул. Дровяная, 15.</p>
+        </div>
+    </footer>
+
+    <!-- Shopping Cart Sidebar -->
+    <div x-show="isCartOpen" 
+         x-cloak
+         class="fixed inset-0 z-[100] overflow-hidden" 
+         aria-labelledby="slide-over-title" role="dialog" aria-modal="true">
+        <div class="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity" 
+             @click="isCartOpen = false"
+             x-show="isCartOpen"
+             x-transition:enter="ease-in-out duration-500"
+             x-transition:enter-start="opacity-0"
+             x-transition:enter-end="opacity-100"
+             x-transition:leave="ease-in-out duration-500"
+             x-transition:leave-start="opacity-100"
+             x-transition:leave-end="opacity-0"></div>
+
+        <div class="fixed inset-y-0 right-0 max-w-full flex pl-10">
+            <div class="w-screen max-w-md transform transition ease-in-out duration-500 sm:duration-700"
+                 x-show="isCartOpen"
+                 x-transition:enter="transform transition ease-in-out duration-500 sm:duration-700"
+                 x-transition:enter-start="translate-x-full"
+                 x-transition:enter-end="translate-x-0"
+                 x-transition:leave="transform transition ease-in-out duration-500 sm:duration-700"
+                 x-transition:leave-start="translate-x-0"
+                 x-transition:leave-end="translate-x-full">
+                
+                <div class="h-full flex flex-col bg-[#111] shadow-2xl border-l border-white/10">
+                    <div class="flex-1 py-6 overflow-y-auto px-4 sm:px-6">
+                        <div class="flex items-start justify-between">
+                            <h2 class="text-2xl font-bold text-white" id="slide-over-title">Ваш заказ</h2>
+                            <div class="ml-3 h-7 flex items-center">
+                                <button @click="isCartOpen = false" class="text-gray-400 hover:text-white transition">
+                                    <span class="sr-only">Закрыть</span>
+                                    <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="mt-8">
+                            <div x-show="cart.length === 0" class="text-center py-20">
+                                <p class="text-gray-500 italic">Ваша корзина пока пуста...</p>
+                                <button @click="isCartOpen = false" class="mt-4 text-orange-500 font-bold underline">Исправить это</button>
+                            </div>
+                            
+                            <ul role="list" class="-my-6 divide-y divide-white/10">
+                                <template x-for="item in cart" :key="item.id">
+                                    <li class="py-6 flex">
+                                        <div class="flex-shrink-0 w-24 h-24 overflow-hidden rounded-md border border-white/10">
+                                            <img :src="item.image" :alt="item.name" class="w-full h-full object-center object-cover">
+                                        </div>
+
+                                        <div class="ml-4 flex-1 flex flex-col">
+                                            <div>
+                                                <div class="flex justify-between text-base font-medium text-white">
+                                                    <h3 x-text="item.name"></h3>
+                                                    <p class="ml-4" x-text="(item.price * item.quantity) + ' ₽'"></p>
+                                                </div>
+                                                <p class="mt-1 text-sm text-gray-500" x-text="item.diameter + ' см'"></p>
+                                            </div>
+                                            <div class="flex-1 flex items-end justify-between text-sm">
+                                                <div class="flex items-center space-x-3 bg-white/5 px-3 py-1 rounded-full">
+                                                    <button @click="updateQuantity(item.id, -1)" class="text-orange-500 font-bold">-</button>
+                                                    <span class="text-white" x-text="item.quantity"></span>
+                                                    <button @click="updateQuantity(item.id, 1)" class="text-orange-500 font-bold">+</button>
+                                                </div>
+                                                <button @click="removeFromCart(item.id)" class="font-medium text-orange-600 hover:text-orange-500">Удалить</button>
+                                            </div>
+                                        </div>
+                                    </li>
+                                </template>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div x-show="cart.length > 0" class="border-t border-white/10 py-6 px-4 sm:px-6">
+                        <div class="flex justify-between text-base font-medium text-white">
+                            <p>Итого</p>
+                            <p x-text="cartTotal + ' ₽'"></p>
+                        </div>
+                        <p class="mt-0.5 text-sm text-gray-500">Доставка включена в стоимость заказа.</p>
+                        <div class="mt-6">
+                            <button @click="checkout()" class="w-full flex justify-center items-center px-6 py-4 border border-transparent rounded-sm shadow-sm text-lg font-bold text-white bg-orange-600 hover:bg-orange-700 transition-colors">
+                                Оформить заказ
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function pizzeriaApp() {
+            return {
+                isCartOpen: false,
+                cart: [],
+                pizzas: [
+                    {
+                        id: 1,
+                        name: 'Дьявола',
+                        description: 'Острая пепперони, моцарелла, томатный соус, перец чили и фирменное масло с базиликом.',
+                        price: 750,
+                        weight: 480,
+                        diameter: 32,
+                        image: 'https://images.unsplash.com/photo-1534308983496-4fabb1a015ee?q=80&w=800&auto=format&fit=crop'
+                    },
+                    {
+                        id: 2,
+                        name: 'Маргарита DOP',
+                        description: 'Классика из печи: томаты Сан-Марцано, моцарелла ди буффала, свежий базилик и оливковое масло.',
+                        price: 620,
+                        weight: 420,
+                        diameter: 32,
+                        image: 'https://images.unsplash.com/photo-1574071318508-1cdbad80ad50?q=80&w=800&auto=format&fit=crop'
+                    },
+                    {
+                        id: 3,
+                        name: 'Трюфельный Лес',
+                        description: 'Сливочный соус, лесные грибы, моцарелла, трюфельное масло и свежий тимьян.',
+                        price: 890,
+                        weight: 450,
+                        diameter: 32,
+                        image: 'https://images.unsplash.com/photo-1513104890138-7c749659a591?q=80&w=800&auto=format&fit=crop'
+                    },
+                    {
+                        id: 4,
+                        name: 'Четыре Сыра',
+                        description: 'Горгонзола, таледжио, пармезан и моцарелла. Идеальный баланс мягкости и остроты.',
+                        price: 790,
+                        weight: 440,
+                        diameter: 32,
+                        image: 'https://images.unsplash.com/photo-1573821663912-569905455b1c?q=80&w=800&auto=format&fit=crop'
+                    },
+                    {
+                        id: 5,
+                        name: 'Прошутто и Руккола',
+                        description: 'Тонкая пармская ветчина, свежая руккола, стружка пармезана и кедровые орешки.',
+                        price: 850,
+                        weight: 460,
+                        diameter: 32,
+                        image: 'https://images.unsplash.com/photo-1590947132387-155cc02f3212?q=80&w=800&auto=format&fit=crop'
+                    },
+                    {
+                        id: 6,
+                        name: 'Мясная Охота',
+                        description: 'Бекон, ростбиф, охотничьи колбаски, красный лук и соус BBQ на дровах.',
+                        price: 920,
+                        weight: 520,
+                        diameter: 32,
+                        image: 'https://images.unsplash.com/photo-1541745537411-b8046dc6d66c?q=80&w=800&auto=format&fit=crop'
+                    }
+                ],
+                
+                get cartTotal() {
+                    return this.cart.reduce((total, item) => total + (item.price * item.quantity), 0);
+                },
+                
+                get cartTotalItems() {
+                    return this.cart.reduce((total, item) => total + item.quantity, 0);
+                },
+                
+                addToCart(pizza) {
+                    const existing = this.cart.find(i => i.id === pizza.id);
+                    if (existing) {
+                        existing.quantity++;
+                    } else {
+                        this.cart.push({...pizza, quantity: 1});
+                    }
+                    // Simple feedback
+                    this.isCartOpen = true;
+                },
+                
+                updateQuantity(id, delta) {
+                    const item = this.cart.find(i => i.id === id);
+                    if (item) {
+                        item.quantity += delta;
+                        if (item.quantity <= 0) {
+                            this.removeFromCart(id);
+                        }
+                    }
+                },
+                
+                removeFromCart(id) {
+                    this.cart = this.cart.filter(i => i.id !== id);
+                },
+                
+                checkout() {
+                    alert('Спасибо за заказ! Наш менеджер свяжется с вами в течение 2 минут.');
+                    this.cart = [];
+                    this.isCartOpen = false;
+                }
+            }
+        }
+    </script>
+</body>
+</html>

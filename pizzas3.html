@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Пицца на дровах.</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;600&family=Playfair+Display:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet" />
+
+  <style>
+    :root {
+      --bg-color: #0e0e0e; /* обновлено */
+      --card-bg: #1c1c1c;
+      --text-primary: #e6e6e3;
+      --text-secondary: #8f8f8f;
+      --accent: #cd3f29;
+      --border: #333333;
+      --spacing: 20px;
+      --radius: 2px;
+      --safe-top: env(safe-area-inset-top, 0px);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: var(--bg-color);
+      color: var(--text-primary);
+      font-family: 'Manrope', sans-serif;
+      line-height: 1.5;
+      overflow-x: hidden;
+      position: relative;
+
+      /* Чтобы контент не залезал под "чёлку" */
+      padding-top: var(--safe-top);
+    }
+
+    /* Safe-area blur bar (над header, в зоне "чёлки") */
+    body::before {
+      content: "";
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: var(--safe-top);
+      background: rgba(14, 14, 14, 0.75);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      z-index: 1000;
+      pointer-events: none;
+    }
+
+    /* Noise Texture Overlay */
+    body::after {
+      content: "";
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      background: url('https://grainy-gradients.vercel.app/noise.svg');
+      opacity: 0.05;
+      z-index: 9999;
+    }
+
+    /* Lock scroll when cart is open */
+    body.cart-open {
+      overflow: hidden;
+      position: fixed;
+      width: 100%;
+    }
+
+    h1, h2, h3 { font-family: 'Playfair Display', serif; font-weight: 400; }
+    a { text-decoration: none; color: inherit; }
+    button { cursor: pointer; border: none; font-family: inherit; }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 var(--spacing);
+    }
+
+    /* Header */
+    header {
+      padding: 40px 0;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: var(--safe-top); /* ключевое: липнем ниже safe-area */
+      background: rgba(14, 14, 14, 0.88);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      z-index: 100;
+    }
+
+    .logo {
+      font-size: 1.6rem;
+      letter-spacing: -0.04em;
+      text-transform: uppercase;
+      border: 1px solid var(--text-primary);
+      padding: 6px 14px;
+      font-weight: 600;
+    }
+
+    .cart-trigger {
+      position: relative;
+      background: transparent;
+      color: var(--text-primary);
+      font-size: 1.05rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 8px;
+    }
+
+    .cart-icon {
+      width: 20px;
+      height: 20px;
+      display: inline-block;
+      opacity: 0.9;
+    }
+
+    .cart-label { display: inline-block; }
+
+    .cart-count {
+      background: var(--accent);
+      color: #fff;
+      font-size: 0.75rem;
+      min-width: 20px;
+      height: 20px;
+      padding: 0 6px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      font-family: 'Manrope';
+      line-height: 1;
+    }
+
+    /* Hero */
+    .hero {
+      padding: 80px 0;
+      text-align: center;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .hero h1 {
+      font-size: clamp(2.5rem, 5vw, 4.5rem);
+      margin-bottom: 20px;
+      line-height: 1.1;
+    }
+
+    .hero h1 span {
+      color: var(--accent);
+      font-style: italic;
+    }
+
+    .hero p {
+      max-width: 680px;
+      margin: 0 auto;
+      color: var(--text-secondary);
+      font-size: 1.1rem;
+    }
+
+    /* Catalog */
+    .catalog { padding: 60px 0; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+    }
+
+    .card {
+      background: var(--bg-color);
+      padding: 30px;
+      display: flex;
+      flex-direction: column;
+      transition: transform 0.3s ease, background-color 0.3s;
+      position: relative;
+    }
+
+    .card:hover { background-color: #141414; z-index: 1; }
+
+    .card-image {
+      width: 100%;
+      aspect-ratio: 1;
+      object-fit: cover;
+      margin-bottom: 20px;
+      filter: saturate(0.9) contrast(1.1);
+      transition: 0.4s;
+      border-radius: var(--radius);
+    }
+
+    .card:hover .card-image { filter: saturate(1.1) contrast(1.1); transform: scale(1.02); }
+
+    .badges {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 15px;
+      flex-wrap: wrap;
+    }
+
+    .badge {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 4px 8px;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+    }
+
+    .badge.spicy { border-color: var(--accent); color: var(--accent); }
+    .badge.meat { border-color: #8f8f8f; }
+
+    .card h3 { font-size: 1.5rem; margin-bottom: 10px; }
+
+    .card-desc {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      margin-bottom: 20px;
+      flex-grow: 1;
+    }
+
+    .card-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: auto;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+    }
+
+    .price {
+      font-size: 1.2rem;
+      font-weight: 600;
+      font-family: 'Playfair Display', serif;
+    }
+
+    .add-btn {
+      background: transparent;
+      color: var(--text-primary);
+      border: 1px solid var(--text-primary);
+      padding: 10px 20px;
+      text-transform: uppercase;
+      font-size: 0.8rem;
+      letter-spacing: 0.1em;
+      transition: 0.2s;
+    }
+
+    .add-btn:hover { background: var(--text-primary); color: var(--bg-color); }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 22px;
+      transform: translateX(-50%);
+      background: rgba(20, 20, 20, 0.9);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      padding: 12px 14px;
+      max-width: min(520px, calc(100% - 32px));
+      z-index: 2000;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease, transform 0.25s ease;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border-radius: 2px;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(-6px);
+    }
+
+    .toast strong { color: var(--accent); font-weight: 600; }
+
+    /* Cart (Off-canvas) */
+    .cart-overlay {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(5px);
+      -webkit-backdrop-filter: blur(5px);
+      z-index: 999;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s;
+    }
+
+    .cart-overlay.active { opacity: 1; pointer-events: all; }
+
+    .cart-sidebar {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 450px;
+      max-width: 100%;
+      height: 100%;
+      background: #121212;
+      border-left: 1px solid var(--border);
+      z-index: 1000;
+      transform: translateX(100%);
+      transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      display: flex;
+      flex-direction: column;
+      padding: 40px;
+      padding-top: calc(40px + var(--safe-top)); /* чтобы внутри сайдбара тоже учесть safe-area */
+    }
+
+    .cart-sidebar.active { transform: translateX(0); }
+
+    .cart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 18px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .close-cart { background: none; color: var(--text-secondary); font-size: 1.5rem; }
+
+    .cart-items {
+      flex-grow: 1;
+      overflow-y: auto;
+      padding-right: 6px;
+    }
+
+    .cart-item {
+      display: flex;
+      align-items: center;
+      margin-bottom: 18px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid #222;
+      gap: 12px;
+    }
+
+    .cart-item img {
+      width: 72px;
+      height: 72px;
+      object-fit: cover;
+      border-radius: 2px;
+      flex: 0 0 auto;
+    }
+
+    .cart-item-info { flex-grow: 1; min-width: 0; }
+
+    .cart-item-title {
+      font-family: 'Playfair Display';
+      font-size: 1.05rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .cart-item-price {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      margin-top: 4px;
+    }
+
+    .cart-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex: 0 0 auto;
+    }
+
+    .qty-btn {
+      width: 28px;
+      height: 28px;
+      background: #222;
+      color: var(--text-primary);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #2b2b2b;
+      font-size: 1rem;
+    }
+
+    .qty-value {
+      font-family: 'Manrope';
+      min-width: 22px;
+      text-align: center;
+      font-size: 1rem;
+    }
+
+    .cart-footer {
+      margin-top: 18px;
+      border-top: 1px solid var(--border);
+      padding-top: 18px;
+    }
+
+    .checkout-fields {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .field {
+      width: 100%;
+      background: rgba(255,255,255,0.02);
+      border: 1px solid #2a2a2a;
+      color: var(--text-primary);
+      padding: 12px 12px;
+      outline: none;
+      border-radius: 2px;
+      font-family: 'Manrope';
+      font-size: 0.95rem;
+    }
+
+    .field::placeholder { color: #6e6e6e; }
+
+    .total-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 1.5rem;
+      font-family: 'Playfair Display';
+      margin-bottom: 14px;
+      gap: 12px;
+    }
+
+    .checkout-btn {
+      width: 100%;
+      background: var(--accent);
+      color: #fff;
+      padding: 15px;
+      font-size: 1rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      transition: 0.3s;
+    }
+
+    .checkout-btn:hover { background: #b0301c; }
+
+    /* Map */
+    .map-section {
+      height: 400px;
+      border-top: 1px solid var(--border);
+      position: relative;
+      background: #151515;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .map-overlay {
+      position: absolute;
+      z-index: 2;
+      background: rgba(14, 14, 14, 0.82);
+      padding: 30px;
+      border: 1px solid var(--border);
+      text-align: center;
+    }
+
+    .map-iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      /* серые тона (приближенно) */
+      filter: grayscale(100%) contrast(1.2) brightness(0.9);
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .hero h1 { font-size: 2.5rem; }
+      .grid { grid-template-columns: 1fr; }
+      .cart-sidebar { width: 100%; padding: 20px; padding-top: calc(20px + var(--safe-top)); }
+
+      /* На телефоне скрываем текст "Корзина", оставляем иконку + бейдж */
+      .cart-label { display: none; }
+
+      /* Увеличить цифру количества и кнопки +/- */
+      .qty-btn { width: 44px; height: 44px; font-size: 1.35rem; }
+      .qty-value { font-size: 1.25rem; min-width: 28px; }
+    }
+
+    /* Animations */
+    .fade-in {
+      opacity: 0;
+      transform: translateY(20px);
+      transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+    }
+    .fade-in.visible { opacity: 1; transform: translateY(0); }
+  </style>
+</head>
+
+<body>
+  <div class="toast" id="toast"></div>
+
+  <div class="container">
+    <header>
+      <div class="logo">Пицца на дровах.</div>
+
+      <button class="cart-trigger" onclick="toggleCart()">
+        <!-- Иконка корзины -->
+        <svg class="cart-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M7 7h14l-1.2 7.2a2 2 0 0 1-2 1.6H9.1a2 2 0 0 1-2-1.6L5.6 3.8A1.5 1.5 0 0 0 4.1 2.5H2"
+                stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M9.5 21a1.2 1.2 0 1 0 0-2.4 1.2 1.2 0 0 0 0 2.4Z"
+                fill="currentColor"/>
+          <path d="M17.5 21a1.2 1.2 0 1 0 0-2.4 1.2 1.2 0 0 0 0 2.4Z"
+                fill="currentColor"/>
+        </svg>
+
+        <span class="cart-label">Корзина</span>
+        <span class="cart-count" id="cartCount">0</span>
+      </button>
+    </header>
+
+    <section class="hero fade-in">
+      <h1>Классическая Италия<br /><span>В Сердце России</span></h1>
+      <p>
+        Дровяная печь. Испытание огнем. Тесто 72 часов ферментации.
+        Ингредиенты, за которые нам не стыдно. Строго, честно, вкусно.
+      </p>
+    </section>
+
+    <section class="catalog">
+      <div class="grid" id="catalogGrid"></div>
+    </section>
+  </div>
+
+  <section class="map-section">
+    <!-- Яндекс карта (виджет) -->
+    <iframe
+      class="map-iframe"
+      src="https://yandex.ru/map-widget/v1/?text=%D0%9A%D0%BE%D1%80%D0%BE%D0%BB%D1%91%D0%B2%2C%20%D1%83%D0%BB.%20%D0%94%D0%B5%D0%BA%D0%B0%D0%B1%D1%80%D0%B8%D1%81%D1%82%D0%BE%D0%B2%2022&z=16"
+      allowfullscreen=""
+      loading="lazy"
+    ></iframe>
+
+    <div class="map-overlay fade-in">
+      <h3>Ждем вас</h3>
+      <p>г. Королев, ул. Декабристов 22</p>
+      <p style="margin-top: 10px; color: var(--accent);">Ежедневно с 12:00 до 23:00</p>
+    </div>
+  </section>
+
+  <!-- Cart Sidebar -->
+  <div class="cart-overlay" onclick="toggleCart()"></div>
+  <div class="cart-sidebar">
+    <div class="cart-header">
+      <h2>Ваш заказ</h2>
+      <button class="close-cart" onclick="toggleCart()">✕</button>
+    </div>
+
+    <div class="cart-items" id="cartItems">
+      <p style="text-align: center; color: var(--text-secondary); margin-top: 50px;">
+        Корзина пуста, как печь утром.
+      </p>
+    </div>
+
+    <div class="cart-footer">
+      <!-- Поля перед итогом -->
+      <div class="checkout-fields">
+        <input class="field" id="customerName" type="text" placeholder="Имя" autocomplete="name" />
+        <input class="field" id="customerPhone" type="tel" placeholder="Телефон" autocomplete="tel" />
+        <input class="field" id="customerAddress" type="text" placeholder="Адрес" autocomplete="street-address" />
+      </div>
+
+      <div class="total-row">
+        <span>Итого</span>
+        <span id="cartTotal">0 ₽</span>
+      </div>
+
+      <button class="checkout-btn" onclick="checkout()">Оформить</button>
+    </div>
+  </div>
+
+  <script>
+    const products = [
+      {
+        id: 1,
+        title: "Маргарита Нуар",
+        desc: "Классика. Томатный соус San Marzano, моцарелла, базилик, оливковое масло, черный перец.",
+        price: 650,
+        image: "https://images.unsplash.com/photo-1574071318508-1cdbab80d002?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80",
+        badges: ["Вегетарианская"]
+      },
+      {
+        id: 2,
+        title: "Дьяволо",
+        desc: "Острая салями, перец чили, красный лук, томатная основа. Жжет как совесть.",
+        price: 820,
+        image: "https://images.unsplash.com/photo-1628840042765-356cda07504e?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80",
+        badges: ["Острая", "Мясо"]
+      },
+      {
+        id: 3,
+        title: "Тамбовский Окорок",
+        desc: "Сливочный соус, моцарелла, печеный картофель, тамбовский окорок, розмарин.",
+        price: 790,
+        image: "https://images.unsplash.com/photo-1513104890138-7c749659a591?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80",
+        badges: ["Мясо", "Авторская"]
+      },
+      {
+        id: 4,
+        title: "Четыре Сыра",
+        desc: "Горгонзола, моцарелла, пармезан, скаморца. Мед и грецкий орех.",
+        price: 850,
+        image: "https://images.unsplash.com/photo-1573821663912-569905455b1c?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80",
+        badges: ["Вегетарианская"]
+      },
+      {
+        id: 5,
+        title: "Груша и Горгонзола",
+        desc: "Сладкая груша, пикантная горгонзола, сливочный соус. Изысканно и строго.",
+        price: 750,
+        image: "https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80",
+        badges: ["Сладкая"]
+      },
+      {
+        id: 6,
+        title: "Мясник",
+        desc: "Бекон, ветчина, пепперони, охотничьи колбаски, барбекю соус.",
+        price: 950,
+        image: "https://images.unsplash.com/photo-1604382354936-07c5d9983bd3?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80",
+        badges: ["Мясо", "Сытная"]
+      }
+    ];
+
+    let cart = [];
+    const catalogGrid = document.getElementById('catalogGrid');
+
+    function renderCatalog() {
+      catalogGrid.innerHTML = products.map(product => `
+        <div class="card fade-in">
+          <img src="${product.image}" alt="${product.title}" class="card-image">
+          <div class="badges">
+            ${product.badges.map(b => {
+              let cls = '';
+              if (b === 'Острая') cls = 'spicy';
+              if (b === 'Мясо' || b === 'Сытная') cls = 'meat';
+              return `<span class="badge ${cls}">${b}</span>`;
+            }).join('')}
+          </div>
+          <h3>${product.title}</h3>
+          <p class="card-desc">${product.desc}</p>
+          <div class="card-footer">
+            <span class="price">${product.price} ₽</span>
+            <button class="add-btn" onclick="addToCart(${product.id})">В корзину</button>
+          </div>
+        </div>
+      `).join('');
+
+      setTimeout(() => observeAnimations(), 100);
+    }
+
+    // Toast
+    let toastTimer = null;
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      toast.innerHTML = message;
+      toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 2200);
+    }
+
+    // Body scroll lock (iOS-friendly)
+    let scrollY = 0;
+    function lockBodyScroll() {
+      scrollY = window.scrollY || 0;
+      document.body.classList.add('cart-open');
+      document.body.style.top = `-${scrollY}px`;
+    }
+    function unlockBodyScroll() {
+      document.body.classList.remove('cart-open');
+      const top = document.body.style.top;
+      document.body.style.top = '';
+      window.scrollTo(0, Math.abs(parseInt(top || '0', 10)));
+    }
+
+    // Cart logic
+    function addToCart(id) {
+      const product = products.find(p => p.id === id);
+      const existing = cart.find(item => item.id === id);
+
+      if (existing) existing.qty++;
+      else cart.push({ ...product, qty: 1 });
+
+      updateCartUI();
+
+      // вместо открытия корзины — уведомление
+      showToast(`Добавлено: <strong>${product.title}</strong>`);
+    }
+
+    function removeFromCart(id) {
+      cart = cart.filter(item => item.id !== id);
+      updateCartUI();
+    }
+
+    function changeQty(id, delta) {
+      const item = cart.find(i => i.id === id);
+      if (!item) return;
+
+      item.qty += delta;
+      if (item.qty <= 0) removeFromCart(id);
+      else updateCartUI();
+    }
+
+    function formatItemPrice(item) {
+      if (item.qty > 1) {
+        const sum = item.price * item.qty;
+        return `${item.price} ₽ × ${item.qty} = ${sum} ₽`;
+      }
+      return `${item.price} ₽`;
+    }
+
+    function updateCartUI() {
+      const cartCount = document.getElementById('cartCount');
+      const cartTotal = document.getElementById('cartTotal');
+      const cartItems = document.getElementById('cartItems');
+
+      const totalQty = cart.reduce((acc, item) => acc + item.qty, 0);
+      const totalPrice = cart.reduce((acc, item) => acc + (item.price * item.qty), 0);
+
+      cartCount.textContent = totalQty;
+      cartTotal.textContent = totalPrice + ' ₽';
+
+      if (cart.length === 0) {
+        cartItems.innerHTML = '<p style="text-align: center; color: var(--text-secondary); margin-top: 50px;">Корзина пуста.</p>';
+        return;
+      }
+
+      cartItems.innerHTML = cart.map(item => `
+        <div class="cart-item">
+          <img src="${item.image}" alt="${item.title}">
+          <div class="cart-item-info">
+            <div class="cart-item-title">${item.title}</div>
+            <div class="cart-item-price">${formatItemPrice(item)}</div>
+          </div>
+          <div class="cart-controls">
+            <button class="qty-btn" onclick="changeQty(${item.id}, -1)">-</button>
+            <span class="qty-value">${item.qty}</span>
+            <button class="qty-btn" onclick="changeQty(${item.id}, 1)">+</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // UI interactions
+    function isCartOpen() {
+      return document.querySelector('.cart-sidebar').classList.contains('active');
+    }
+
+    function toggleCart(forceOpen = null) {
+      const sidebar = document.querySelector('.cart-sidebar');
+      const overlay = document.querySelector('.cart-overlay');
+
+      const willOpen = forceOpen === null ? !isCartOpen() : !!forceOpen;
+
+      if (willOpen) {
+        sidebar.classList.add('active');
+        overlay.classList.add('active');
+        lockBodyScroll();
+      } else {
+        sidebar.classList.remove('active');
+        overlay.classList.remove('active');
+        unlockBodyScroll();
+      }
+    }
+
+    function checkout() {
+      const name = document.getElementById('customerName').value.trim();
+      const phone = document.getElementById('customerPhone').value.trim();
+      const address = document.getElementById('customerAddress').value.trim();
+
+      if (cart.length === 0) {
+        showToast('Корзина пустая.');
+        return;
+      }
+
+      // минимальная проверка — без занудства
+      if (!name || !phone || !address) {
+        showToast('Заполните: <strong>Имя</strong>, <strong>Телефон</strong>, <strong>Адрес</strong>.');
+        return;
+      }
+
+      alert(`Заказ оформлен.\nИмя: ${name}\nТелефон: ${phone}\nАдрес: ${address}`);
+    }
+
+    // Animations
+    function observeAnimations() {
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) entry.target.classList.add('visible');
+        });
+      }, { threshold: 0.1 });
+
+      document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      renderCatalog();
+      updateCartUI();
+    });
+  </script>
+</body>
+</html>

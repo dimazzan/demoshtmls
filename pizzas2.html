@@ -2,8 +2,8 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ПИЦЦА НА ДРОВАХ | Пепел</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>ПИЦЦА НА ДРОВАХ | Классическая Италия</title>
     
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -12,20 +12,27 @@
 
     <style>
         :root {
-            --bg-color: #0e0e0e; /* Updated */
-            --card-bg: #1c1c1c;
+            /* Обновленный фон */
+            --bg-color: #0e0e0e; 
+            --card-bg: #161616;
             --text-primary: #e6e6e3;
             --text-secondary: #8f8f8f;
             --accent: #cd3f29;
-            --border: #333333;
+            --border: #2a2a2a;
             --spacing: 20px;
             --radius: 2px;
+            --header-bg: rgba(14, 14, 14, 0.85);
         }
 
         * {
             box-sizing: border-box;
             margin: 0;
             padding: 0;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        html {
+            background-color: var(--bg-color); /* Фикс "пустого места" при оверскролле на iOS */
         }
 
         body {
@@ -37,7 +44,12 @@
             position: relative;
         }
 
-        /* Noise Texture Overlay */
+        /* Блокировка скролла при открытой корзине */
+        body.no-scroll {
+            overflow: hidden;
+        }
+
+        /* Noise Texture */
         body::after {
             content: "";
             position: fixed;
@@ -47,7 +59,7 @@
             height: 100%;
             pointer-events: none;
             background: url('https://grainy-gradients.vercel.app/noise.svg');
-            opacity: 0.05;
+            opacity: 0.04;
             z-index: 9999;
         }
 
@@ -58,70 +70,86 @@
 
         a { text-decoration: none; color: inherit; }
         button { cursor: pointer; border: none; font-family: inherit; }
-        input, textarea { font-family: inherit; }
 
-        /* Container */
         .container {
             max-width: 1200px;
             margin: 0 auto;
             padding: 0 var(--spacing);
         }
 
-        /* Header */
+        /* --- Header & Notch Fix --- */
         header {
-            padding: 40px 0;
             border-bottom: 1px solid var(--border);
             display: flex;
             justify-content: space-between;
             align-items: center;
             position: sticky;
             top: 0;
-            background: rgba(14, 14, 14, 0.9); /* Matching new bg opacity */
-            backdrop-filter: blur(10px);
+            background: var(--header-bg);
+            /* Размытие фона хедера */
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
             z-index: 100;
+            /* Учет безопасной зоны (челки) iPhone [web:1] */
+            padding-top: max(20px, env(safe-area-inset-top));
+            padding-bottom: 20px;
+            padding-left: var(--spacing);
+            padding-right: var(--spacing);
+            margin-top: -1px; /* Фикс микро-щелей */
         }
 
         .logo {
-            font-size: 1.5rem; /* Немного уменьшил, так как текста стало больше */
-            letter-spacing: -0.05em;
+            font-size: 1.8rem;
+            letter-spacing: -0.03em;
             text-transform: uppercase;
             border: 1px solid var(--text-primary);
-            padding: 5px 15px;
+            padding: 5px 12px;
             font-weight: 600;
+            white-space: nowrap;
         }
 
+        /* Cart Trigger Button */
         .cart-trigger {
-            position: relative;
             background: transparent;
             color: var(--text-primary);
-            font-size: 1.1rem;
+            font-size: 1rem;
             text-transform: uppercase;
             letter-spacing: 0.1em;
             display: flex;
             align-items: center;
             gap: 12px;
+            position: relative;
         }
 
+        /* Иконка корзины */
         .cart-icon-svg {
             width: 24px;
             height: 24px;
-            fill: currentColor;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 1.5;
         }
 
-        .cart-count {
+        /* Бейдж */
+        .cart-badge {
+            position: absolute;
+            top: -8px;
+            right: -8px;
             background: var(--accent);
             color: #fff;
-            font-size: 0.8rem;
-            width: 20px;
-            height: 20px;
+            font-size: 0.7rem;
+            min-width: 18px;
+            height: 18px;
             display: flex;
             align-items: center;
             justify-content: center;
             border-radius: 50%;
             font-family: 'Manrope';
-            position: absolute;
-            top: -8px;
-            right: -10px;
+            padding: 2px;
+        }
+
+        .cart-text {
+            display: inline-block;
         }
 
         /* Hero Section */
@@ -143,20 +171,18 @@
         }
 
         .hero p {
-            max-width: 600px;
+            max-width: 650px;
             margin: 0 auto;
             color: var(--text-secondary);
-            font-size: 1.1rem;
+            font-size: 1.05rem;
         }
 
         /* Catalog Grid */
-        .catalog {
-            padding: 60px 0;
-        }
+        .catalog { padding: 60px 0; }
 
         .grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
             gap: 1px;
             background: var(--border);
             border: 1px solid var(--border);
@@ -167,12 +193,12 @@
             padding: 30px;
             display: flex;
             flex-direction: column;
-            transition: transform 0.3s ease, background-color 0.3s;
+            transition: 0.3s;
             position: relative;
         }
 
         .card:hover {
-            background-color: #171717;
+            background-color: #141414;
             z-index: 1;
         }
 
@@ -199,7 +225,7 @@
         }
 
         .badge {
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             padding: 4px 8px;
@@ -208,19 +234,9 @@
         }
 
         .badge.spicy { border-color: var(--accent); color: var(--accent); }
-        .badge.meat { border-color: #8f8f8f; }
 
-        .card h3 {
-            font-size: 1.5rem;
-            margin-bottom: 10px;
-        }
-
-        .card-desc {
-            color: var(--text-secondary);
-            font-size: 0.9rem;
-            margin-bottom: 20px;
-            flex-grow: 1;
-        }
+        .card h3 { font-size: 1.4rem; margin-bottom: 10px; }
+        .card-desc { color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 20px; flex-grow: 1; }
 
         .card-footer {
             display: flex;
@@ -231,11 +247,7 @@
             border-top: 1px solid var(--border);
         }
 
-        .price {
-            font-size: 1.2rem;
-            font-weight: 600;
-            font-family: 'Playfair Display', serif;
-        }
+        .price { font-size: 1.2rem; font-family: 'Playfair Display', serif; }
 
         .add-btn {
             background: transparent;
@@ -243,23 +255,17 @@
             border: 1px solid var(--text-primary);
             padding: 10px 20px;
             text-transform: uppercase;
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             letter-spacing: 0.1em;
             transition: 0.2s;
         }
+        .add-btn:hover { background: var(--text-primary); color: var(--bg-color); }
 
-        .add-btn:hover {
-            background: var(--text-primary);
-            color: var(--bg-color);
-        }
-
-        /* Cart Sidebar */
+        /* --- Cart Sidebar --- */
         .cart-overlay {
             position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
             background: rgba(0,0,0,0.6);
             backdrop-filter: blur(5px);
             z-index: 999;
@@ -267,27 +273,32 @@
             pointer-events: none;
             transition: opacity 0.3s;
         }
-
         .cart-overlay.active { opacity: 1; pointer-events: all; }
 
         .cart-sidebar {
             position: fixed;
-            top: 0;
-            right: 0;
-            width: 450px;
+            top: 0; right: 0;
+            width: 480px;
             max-width: 100%;
             height: 100%;
-            background: #141414;
+            background: #111;
             border-left: 1px solid var(--border);
             z-index: 1000;
             transform: translateX(100%);
             transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
             display: flex;
             flex-direction: column;
-            padding: 40px;
+            padding: 0; /* Padding removed for inner scroll */
         }
-
         .cart-sidebar.active { transform: translateX(0); }
+
+        .cart-inner {
+            padding: 40px;
+            height: 100%;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
 
         .cart-header {
             display: flex;
@@ -298,18 +309,9 @@
             border-bottom: 1px solid var(--border);
         }
 
-        .close-cart {
-            background: none;
-            color: var(--text-secondary);
-            font-size: 1.5rem;
-            padding: 10px; /* Побольше область нажатия */
-        }
+        .close-cart { background: none; color: var(--text-secondary); font-size: 1.5rem; padding: 5px; }
 
-        .cart-items {
-            flex-grow: 1;
-            overflow-y: auto;
-            margin-bottom: 20px;
-        }
+        .cart-items { flex-grow: 1; margin-bottom: 30px; }
 
         .cart-item {
             display: flex;
@@ -318,95 +320,92 @@
             padding-bottom: 20px;
             border-bottom: 1px solid #222;
         }
-
         .cart-item img {
-            width: 70px;
-            height: 70px;
+            width: 60px; height: 60px;
             object-fit: cover;
             margin-right: 15px;
             border-radius: 2px;
         }
-
         .cart-item-info { flex-grow: 1; }
-        
-        .cart-item-title { font-family: 'Playfair Display'; font-size: 1.1rem; }
-        .cart-item-price { color: var(--text-secondary); font-size: 0.9rem; }
+        .cart-item-title { font-family: 'Playfair Display'; font-size: 1.1rem; line-height: 1.2; margin-bottom: 4px;}
+        .cart-item-calc { color: var(--text-secondary); font-size: 0.85rem; }
 
-        .cart-controls {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
+        .cart-controls { display: flex; align-items: center; gap: 10px; }
         .qty-btn {
-            width: 25px;
-            height: 25px;
+            width: 32px; height: 32px; /* Увеличено для тапа */
             background: #222;
             color: var(--text-primary);
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: background 0.2s;
+            font-size: 1.1rem;
         }
-        .qty-btn:hover { background: #333; }
+        .qty-val { width: 20px; text-align: center; }
 
         /* Checkout Form */
-        .checkout-form {
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-            margin-bottom: 20px;
-            padding-top: 20px;
-            border-top: 1px solid var(--border);
-        }
-
+        .checkout-form { margin-top: auto; }
+        .form-group { margin-bottom: 15px; }
         .form-input {
-            background: transparent;
-            border: none;
-            border-bottom: 1px solid #333;
+            width: 100%;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            padding: 15px;
             color: var(--text-primary);
-            padding: 10px 0;
-            font-size: 1rem;
+            font-family: 'Manrope';
+            font-size: 0.95rem;
             outline: none;
-            transition: border-color 0.3s;
+            transition: 0.3s;
         }
+        .form-input:focus { border-color: var(--text-secondary); }
+        .error-msg { color: var(--accent); font-size: 0.8rem; margin-top: 5px; display: none; }
 
-        .form-input:focus {
-            border-bottom-color: var(--accent);
-        }
-
-        .form-input::placeholder {
-            color: #555;
-        }
-
-        .cart-footer {
-            margin-top: 20px; /* Отступ от полей ввода */
-            padding-top: 10px; /* Небольшой внутренний отступ */
-        }
-
-        .total-row {
-            display: flex;
-            justify-content: space-between;
-            font-size: 1.5rem;
-            font-family: 'Playfair Display';
-            margin-bottom: 20px;
+        .cart-total-row {
+            display: flex; justify-content: space-between;
+            font-size: 1.4rem; font-family: 'Playfair Display';
+            margin: 20px 0; padding-top: 20px;
+            border-top: 1px solid var(--border);
         }
 
         .checkout-btn {
             width: 100%;
             background: var(--accent);
             color: #fff;
-            padding: 15px;
+            padding: 16px;
             font-size: 1rem;
             text-transform: uppercase;
             letter-spacing: 0.1em;
             transition: 0.3s;
         }
+        .checkout-btn:disabled { background: #444; color: #888; cursor: not-allowed; }
 
-        .checkout-btn:hover { background: #b0301c; }
+        /* Map Section */
+        .map-section {
+            height: 450px;
+            border-top: 1px solid var(--border);
+            position: relative;
+            background: #1c1c1c;
+            overflow: hidden;
+        }
+        /* Фильтр для Яндекс Карты, чтобы сделать ее темной [web:6] */
+        .map-frame {
+            width: 100%; height: 100%; border: 0;
+            filter: grayscale(1) invert(0.9) contrast(0.9) brightness(0.9);
+        }
 
-        /* Notification Toast */
-        .notification-container {
+        .map-overlay {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 2;
+            background: rgba(14, 14, 14, 0.9);
+            padding: 40px;
+            border: 1px solid var(--border);
+            text-align: center;
+            backdrop-filter: blur(8px);
+        }
+
+        /* Toast Notification */
+        .toast-container {
             position: fixed;
             bottom: 30px;
             right: 30px;
@@ -415,95 +414,52 @@
             flex-direction: column;
             gap: 10px;
         }
-
         .toast {
             background: #1c1c1c;
             border: 1px solid var(--border);
-            border-left: 3px solid var(--accent);
+            color: var(--text-primary);
             padding: 15px 25px;
             min-width: 250px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.5);
             display: flex;
             align-items: center;
             justify-content: space-between;
-            animation: slideIn 0.3s ease-out forwards;
+            transform: translateY(20px);
+            opacity: 0;
+            animation: slideUp 0.3s forwards;
         }
-        
-        .toast.hiding {
-            animation: slideOut 0.3s ease-in forwards;
-        }
+        .toast.hiding { animation: fadeOut 0.3s forwards; }
 
-        @keyframes slideIn {
-            from { transform: translateX(100%); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
-        }
-        @keyframes slideOut {
-            from { transform: translateX(0); opacity: 1; }
-            to { transform: translateX(100%); opacity: 0; }
-        }
-
-        /* Map Section */
-        .map-section {
-            height: 400px;
-            border-top: 1px solid var(--border);
-            position: relative;
-            background: #1c1c1c;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            overflow: hidden;
-        }
-        
-        .map-overlay {
-            position: absolute;
-            z-index: 2;
-            background: rgba(14, 14, 14, 0.85);
-            padding: 30px;
-            border: 1px solid var(--border);
-            text-align: center;
-            backdrop-filter: blur(5px);
-        }
+        @keyframes slideUp { to { opacity: 1; transform: translateY(0); } }
+        @keyframes fadeOut { to { opacity: 0; transform: translateY(10px); } }
 
         /* Responsive */
         @media (max-width: 768px) {
-            header { padding: 20px 0; } /* Уменьшили полоску */
-            
             .hero h1 { font-size: 2.5rem; }
             .grid { grid-template-columns: 1fr; }
+            .cart-sidebar { width: 100%; }
+            .cart-inner { padding: 20px; }
             
-            .cart-sidebar { width: 100%; padding: 20px; }
+            /* Скрываем текст "Корзина" на телефоне */
+            .cart-text { display: none; }
             
-            /* Увеличение элементов управления в корзине на телефоне */
-            .qty-btn {
-                width: 40px;
-                height: 40px;
-                font-size: 1.2rem;
-            }
-            .cart-controls span {
-                font-size: 1.2rem;
-                min-width: 30px;
-                text-align: center;
-            }
+            /* Увеличиваем элементы управления в корзине */
+            .qty-btn { width: 40px; height: 40px; font-size: 1.2rem; }
+            .qty-val { font-size: 1.1rem; width: 30px; }
             
-            .notification-container {
-                right: 0;
-                left: 0;
-                bottom: 0;
-                padding: 20px;
-            }
-            .toast { width: 100%; }
+            .map-overlay { width: 90%; padding: 20px; }
+            
+            .toast-container { right: 0; left: 0; bottom: 0; }
+            .toast { width: 100%; border-left: 0; border-right: 0; border-bottom: 0; }
         }
 
         /* Animations */
         .fade-in {
-            opacity: 0;
-            transform: translateY(20px);
+            opacity: 0; transform: translateY(20px);
             transition: opacity 0.6s ease-out, transform 0.6s ease-out;
         }
-        .fade-in.visible {
-            opacity: 1;
-            transform: translateY(0);
-        }
+        .fade-in.visible { opacity: 1; transform: translateY(0); }
+
     </style>
 </head>
 <body>
@@ -512,14 +468,15 @@
     <header>
         <div class="logo">Пицца на дровах.</div>
         <button class="cart-trigger" onclick="toggleCart()">
-            Корзина
-            <!-- Simple Cart SVG Icon -->
-            <svg class="cart-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="9" cy="21" r="1"></circle>
-                <circle cx="20" cy="21" r="1"></circle>
-                <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"></path>
-            </svg>
-            <span class="cart-count" id="cartCount">0</span>
+            <span class="cart-text">Корзина</span>
+            <div style="position: relative;">
+                <svg class="cart-icon-svg" viewBox="0 0 24 24">
+                    <path d="M6 6h15l-1.5 9h-13L4 3H1" stroke-linecap="round" stroke-linejoin="round"/>
+                    <circle cx="9" cy="20" r="1"/>
+                    <circle cx="18" cy="20" r="1"/>
+                </svg>
+                <div class="cart-badge" id="cartCount">0</div>
+            </div>
         </button>
     </header>
 
@@ -530,59 +487,64 @@
 
     <section class="catalog">
         <div class="grid" id="catalogGrid">
-            <!-- JS Injection Here -->
+            <!-- JS Injection -->
         </div>
     </section>
 </div>
 
 <section class="map-section">
-    <!-- Яндекс карта (iframe с фильтром для темной темы) -->
-    <!-- Координаты Королева примерные для центра -->
+    <!-- Яндекс Карта (iframe) с фильтром -->
     <iframe 
-        src="https://yandex.ru/map-widget/v1/?ll=37.822687%2C55.918901&z=16&pt=37.822687,55.918901,pm2rdm" 
-        width="100%" 
-        height="100%" 
-        style="border:0; filter: invert(100%) hue-rotate(180deg) brightness(0.95) contrast(1.2);" 
-        allowfullscreen="" 
-        loading="lazy">
+        class="map-frame"
+        src="https://yandex.ru/map-widget/v1/?ll=37.8145%2C55.9142&z=17&pt=37.8145,55.9142,pm2rdm"
+        allowfullscreen="true">
     </iframe>
+    
     <div class="map-overlay fade-in">
         <h3>Ждем вас</h3>
-        <p>г. Королев, ул. Декабристов 22</p>
-        <p style="margin-top: 10px; color: var(--accent);">Ежедневно с 12:00 до 23:00</p>
+        <p style="margin: 10px 0; color: var(--text-secondary);">г. Королев, ул. Декабристов 22</p>
+        <p style="color: var(--accent);">Ежедневно с 12:00 до 23:00</p>
     </div>
 </section>
 
 <!-- Cart Sidebar -->
 <div class="cart-overlay" onclick="toggleCart()"></div>
 <div class="cart-sidebar">
-    <div class="cart-header">
-        <h2>Ваш заказ</h2>
-        <button class="close-cart" onclick="toggleCart()">✕</button>
-    </div>
-    <div class="cart-items" id="cartItems">
-        <!-- Items go here -->
-        <p style="text-align: center; color: var(--text-secondary); margin-top: 50px;">Корзина пуста, как печь утром.</p>
-    </div>
-
-    <!-- Новые поля ввода перед итогом -->
-    <div class="checkout-form">
-        <input type="text" id="orderName" class="form-input" placeholder="Ваше имя">
-        <input type="tel" id="orderPhone" class="form-input" placeholder="Телефон">
-        <input type="text" id="orderAddress" class="form-input" placeholder="Адрес доставки">
-    </div>
-
-    <div class="cart-footer">
-        <div class="total-row">
-            <span>Итого</span>
-            <span id="cartTotal">0 ₽</span>
+    <div class="cart-inner">
+        <div class="cart-header">
+            <h2>Ваш заказ</h2>
+            <button class="close-cart" onclick="toggleCart()">✕</button>
         </div>
-        <button class="checkout-btn" onclick="processCheckout()">Оформить</button>
+        
+        <div class="cart-items" id="cartItems">
+            <!-- Items -->
+        </div>
+
+        <div class="checkout-form" id="checkoutForm" style="display:none;">
+            <div class="form-group">
+                <input type="text" class="form-input" placeholder="Ваше имя" id="inputName">
+            </div>
+            <div class="form-group">
+                <input type="tel" class="form-input" placeholder="Телефон" id="inputPhone">
+                <div class="error-msg" id="phoneError">Неверный формат телефона</div>
+            </div>
+            <div class="form-group">
+                <input type="text" class="form-input" placeholder="Адрес доставки" id="inputAddress">
+            </div>
+            
+            <div class="cart-total-row">
+                <span>Итого</span>
+                <span id="cartTotal">0 ₽</span>
+            </div>
+            <button class="checkout-btn" onclick="processCheckout()">Оформить</button>
+        </div>
+        
+        <p id="emptyMsg" style="text-align: center; color: var(--text-secondary); margin-top: 50px;">Корзина пуста.</p>
     </div>
 </div>
 
-<!-- Container for Toast Notifications -->
-<div class="notification-container" id="notificationContainer"></div>
+<!-- Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
 
 <script>
     // Data
@@ -590,7 +552,7 @@
         {
             id: 1,
             title: "Маргарита Нуар",
-            desc: "Классика. Томатный соус San Marzano, моцарелла, базилик, оливковое масло, черный перец.",
+            desc: "Классика. Томатный соус San Marzano, моцарелла, базилик, оливковое масло.",
             price: 650,
             image: "https://images.unsplash.com/photo-1574071318508-1cdbab80d002?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80",
             badges: ["Вегетарианская"]
@@ -606,7 +568,7 @@
         {
             id: 3,
             title: "Тамбовский Окорок",
-            desc: "Сливочный соус, моцарелла, печеный картофель, тамбовский окорок, розмарин.",
+            desc: "Сливочный соус, моцарелла, печеный картофель, тамбовский окорок.",
             price: 790,
             image: "https://images.unsplash.com/photo-1513104890138-7c749659a591?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80",
             badges: ["Мясо", "Авторская"]
@@ -639,7 +601,6 @@
 
     let cart = [];
 
-    // Render Logic
     const catalogGrid = document.getElementById('catalogGrid');
     
     function renderCatalog() {
@@ -650,7 +611,6 @@
                     ${product.badges.map(b => {
                         let cls = '';
                         if(b === 'Острая') cls = 'spicy';
-                        if(b === 'Мясо' || b === 'Сытная') cls = 'meat';
                         return `<span class="badge ${cls}">${b}</span>`;
                     }).join('')}
                 </div>
@@ -666,7 +626,6 @@
         setTimeout(() => observeAnimations(), 100);
     }
 
-    // Cart Logic
     function addToCart(id) {
         const product = products.find(p => p.id === id);
         const existing = cart.find(item => item.id === id);
@@ -678,26 +637,7 @@
         }
         
         updateCartUI();
-        
-        // ВМЕСТО открытия корзины — уведомление
-        showNotification(`Добавлено: ${product.title}`);
-    }
-
-    function showNotification(message) {
-        const container = document.getElementById('notificationContainer');
-        const toast = document.createElement('div');
-        toast.className = 'toast';
-        toast.textContent = message;
-
-        container.appendChild(toast);
-
-        // Auto remove after 3s
-        setTimeout(() => {
-            toast.classList.add('hiding');
-            toast.addEventListener('animationend', () => {
-                toast.remove();
-            });
-        }, 3000);
+        showToast(`Добавлено: ${product.title}`);
     }
 
     function removeFromCart(id) {
@@ -718,81 +658,116 @@
         const cartCount = document.getElementById('cartCount');
         const cartTotal = document.getElementById('cartTotal');
         const cartItems = document.getElementById('cartItems');
+        const emptyMsg = document.getElementById('emptyMsg');
+        const checkoutForm = document.getElementById('checkoutForm');
 
         const totalQty = cart.reduce((acc, item) => acc + item.qty, 0);
         const totalPrice = cart.reduce((acc, item) => acc + (item.price * item.qty), 0);
 
         cartCount.textContent = totalQty;
+        // Бейдж исчезает, если 0
+        cartCount.style.display = totalQty > 0 ? 'flex' : 'none';
+        
         cartTotal.textContent = totalPrice + ' ₽';
 
         if (cart.length === 0) {
-            cartItems.innerHTML = '<p style="text-align: center; color: var(--text-secondary); margin-top: 50px;">Корзина пуста.</p>';
+            cartItems.innerHTML = '';
+            emptyMsg.style.display = 'block';
+            checkoutForm.style.display = 'none';
             return;
         }
 
-        cartItems.innerHTML = cart.map(item => `
+        emptyMsg.style.display = 'none';
+        checkoutForm.style.display = 'block';
+
+        cartItems.innerHTML = cart.map(item => {
+            // Калькуляция если больше 1 штуки
+            const calcText = item.qty > 1 ? `<div class="cart-item-calc">${item.price} ₽ x ${item.qty}</div>` : '';
+
+            return `
             <div class="cart-item">
                 <img src="${item.image}" alt="${item.title}">
                 <div class="cart-item-info">
                     <div class="cart-item-title">${item.title}</div>
-                    <div class="cart-item-price">${item.price} ₽</div>
+                    ${calcText}
+                    <div class="cart-item-price" style="${item.qty > 1 ? 'font-weight:600' : ''}">${item.price * item.qty} ₽</div>
                 </div>
                 <div class="cart-controls">
-                    <button class="qty-btn" onclick="changeQty(${item.id}, -1)">-</button>
-                    <span style="font-family: 'Manrope'">${item.qty}</span>
+                    <button class="qty-btn" onclick="changeQty(${item.id}, -1)">−</button>
+                    <span class="qty-val">${item.qty}</span>
                     <button class="qty-btn" onclick="changeQty(${item.id}, 1)">+</button>
                 </div>
             </div>
-        `).join('');
+            `;
+        }).join('');
     }
 
-    // Checkout
-    function processCheckout() {
-        if(cart.length === 0) {
-            showNotification('Корзина пуста');
-            return;
-        }
-
-        const nameInput = document.getElementById('orderName');
-        const phoneInput = document.getElementById('orderPhone');
-        const addressInput = document.getElementById('orderAddress');
-
-        if(!nameInput.value || !phoneInput.value || !addressInput.value) {
-            alert('Пожалуйста, заполните Имя, Телефон и Адрес');
-            return;
-        }
-
-        // Логика отправки заказа (console.log)
-        console.log("Заказ:", { 
-            cart, 
-            user: { 
-                name: nameInput.value, 
-                phone: phoneInput.value, 
-                address: addressInput.value 
-            }
-        });
-
-        alert(`Спасибо, ${nameInput.value}! Заказ оформлен на адрес ${addressInput.value}. Ждите звонка.`);
+    // Toast Logic
+    function showToast(message) {
+        const container = document.getElementById('toastContainer');
+        const toast = document.createElement('div');
+        toast.className = 'toast';
+        toast.innerHTML = `<span>${message}</span>`;
         
-        // Очистка данных
-        cart = [];
-        nameInput.value = '';   // <--- Добавлено очищение полей
-        phoneInput.value = '';  // <--- Добавлено очищение полей
-        addressInput.value = '';// <--- Добавлено очищение полей
+        container.appendChild(toast);
         
-        updateCartUI();
-        toggleCart();
+        // Remove after 3 seconds
+        setTimeout(() => {
+            toast.classList.add('hiding');
+            toast.addEventListener('animationend', () => toast.remove());
+        }, 3000);
     }
 
-    // UI Interactions
+    // Cart Toggle & Scroll Lock
     function toggleCart() {
         const sidebar = document.querySelector('.cart-sidebar');
         const overlay = document.querySelector('.cart-overlay');
+        const body = document.body;
+        
         sidebar.classList.toggle('active');
         overlay.classList.toggle('active');
+        
+        // Блокировка прокрутки
+        if (sidebar.classList.contains('active')) {
+            body.classList.add('no-scroll');
+        } else {
+            body.classList.remove('no-scroll');
+        }
     }
 
-    // Intersection Observer for Animations
+    // Checkout Validation
+    function processCheckout() {
+        const name = document.getElementById('inputName').value;
+        const phone = document.getElementById('inputPhone').value;
+        const address = document.getElementById('inputAddress').value;
+        const phoneError = document.getElementById('phoneError');
+
+        // Простая Regex валидация телефона РФ [web:10]
+        const phoneRegex = /^(\+7|8)?[\s\-]?\(?[489][0-9]{2}\)?[\s\-]?[0-9]{3}[\s\-]?[0-9]{2}[\s\-]?[0-9]{2}$/;
+
+        let isValid = true;
+
+        if (!phoneRegex.test(phone)) {
+            phoneError.style.display = 'block';
+            isValid = false;
+        } else {
+            phoneError.style.display = 'none';
+        }
+
+        if (!name || !address) {
+            alert('Пожалуйста, заполните все поля');
+            return;
+        }
+
+        if (isValid) {
+            alert(`Спасибо, ${name}! Заказ на адрес ${address} принят. Мы свяжемся по номеру ${phone}.`);
+            cart = [];
+            updateCartUI();
+            toggleCart();
+        }
+    }
+
+    // Animation Observer
     function observeAnimations() {
         const observer = new IntersectionObserver((entries) => {
             entries.forEach(entry => {
@@ -805,9 +780,9 @@
         document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
     }
 
-    // Init
     document.addEventListener('DOMContentLoaded', () => {
         renderCatalog();
+        updateCartUI();
     });
 
 </script>

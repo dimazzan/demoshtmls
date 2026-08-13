@@ -7,7 +7,7 @@ set -o pipefail
 export LC_ALL=C
 export LANG=C
 
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.2.2"
 ITERATIONS="${VPSBENCH_ITERATIONS:-5}"
 CYCLIC_SEC="${VPSBENCH_CYCLIC_SEC:-45}"
 CRYPTO_SEC="${VPSBENCH_CRYPTO_SEC:-5}"
@@ -147,46 +147,60 @@ LAST_VALUE=""
 
 progress_line() {
     local pct="$1" iter="$2" task="$3" name="$4" elapsed="$5" expected="$6"
-    printf '\r%s[%3d%%]%s итерация %d/%d  тест %d/%d  %-25s %3ds/%3ds%s' \
+    printf '\r%s[%3d%%]%s iter %d/%d  task %d/%d  %-25s %3ds/%3ds%s' \
         "$BOLD" "$pct" "$RESET" "$iter" "$ITERATIONS" "$task" "$TASKS_PER_ITER" "$name" "$elapsed" "$expected" "$CLR"
+}
+
+progress_log() {
+    local pct="$1" iter="$2" task="$3" name="$4" elapsed="$5" expected="$6"
+    printf '[%3d%%] iter %d/%d  task %d/%d  %-25s %3ds/%3ds\n' \
+        "$pct" "$iter" "$ITERATIONS" "$task" "$TASKS_PER_ITER" "$name" "$elapsed" "$expected"
 }
 
 run_timed_capture() {
     local expected="$1" iter="$2" task="$3" name="$4" outfile="$5"; shift 5
-    local pid start now elapsed shown pct rc
+    local pid start now elapsed shown pct rc next_log
     : >"$outfile"
     "$@" >"$outfile" 2>&1 &
     pid=$!
     start=$(date +%s)
     shown=-1
+    next_log=0
 
-    if [[ -t 1 ]]; then
-        while kill -0 "$pid" 2>/dev/null; do
-            now=$(date +%s); elapsed=$(( now - start )); (( elapsed > expected )) && elapsed=$expected
+    while kill -0 "$pid" 2>/dev/null; do
+        now=$(date +%s)
+        elapsed=$(( now - start ))
+        (( elapsed > expected )) && elapsed=$expected
+        pct=$(( (DONE_WORK + elapsed) * 100 / TOTAL_WORK ))
+        (( pct > 99 )) && pct=99
+
+        if [[ -t 1 ]]; then
             if (( elapsed != shown )); then
-                pct=$(( (DONE_WORK + elapsed) * 100 / TOTAL_WORK )); (( pct > 99 )) && pct=99
                 progress_line "$pct" "$iter" "$task" "$name" "$elapsed" "$expected"
                 shown=$elapsed
             fi
-            sleep 1
-        done
-    else
-        pct=$(( DONE_WORK * 100 / TOTAL_WORK ))
-        printf '[%3d%%] итерация %d/%d  тест %d/%d  %s\n' "$pct" "$iter" "$ITERATIONS" "$task" "$TASKS_PER_ITER" "$name"
-    fi
+        elif (( elapsed >= next_log )); then
+            progress_log "$pct" "$iter" "$task" "$name" "$elapsed" "$expected"
+            next_log=$(( elapsed + 5 ))
+        fi
+        sleep 1
+    done
 
     wait "$pid"; rc=$?
     DONE_WORK=$(( DONE_WORK + expected ))
     (( DONE_WORK > TOTAL_WORK )) && DONE_WORK=$TOTAL_WORK
+    pct=$(( DONE_WORK * 100 / TOTAL_WORK ))
     if [[ -t 1 ]]; then
-        pct=$(( DONE_WORK * 100 / TOTAL_WORK ))
         progress_line "$pct" "$iter" "$task" "$name" "$expected" "$expected"
         printf '\n'
+    else
+        printf '[%3d%%] iter %d/%d  task %d/%d  %-25s done\n' \
+            "$pct" "$iter" "$ITERATIONS" "$task" "$TASKS_PER_ITER" "$name"
     fi
     return "$rc"
 }
 
-# Output: p99.9_us max_us >=1ms_pct >=5ms_pct >=10ms_pct avg_us
+# Output: p99.9_us max_us count_ge_1ms count_ge_5ms count_ge_10ms avg_us
 parse_cyclic_hist() {
     local file="$1"
     awk '
@@ -204,8 +218,7 @@ parse_cyclic_hist() {
             target=total*0.999; acc=0; q=-1;
             for (i=1; i<=n; i++) {acc+=c[i]; if (q<0 && acc>=target) q=b[i]}
             if (q<0) q=(n ? b[n] : mx);
-            if (total<=0) total=1;
-            printf "%.0f %.0f %.6f %.6f %.6f %.0f\n", q, mx, 100*gt1/total, 100*gt5/total, 100*gt10/total, avg;
+            printf "%.0f %.0f %.0f %.0f %.0f %.0f\n", q, mx, gt1, gt5, gt10, avg;
         }
     ' "$file"
 }
@@ -331,18 +344,80 @@ calc_stats() {
 avg_file() { awk '{s+=$1;n++} END {printf "%.6f", n?s/n:0}' "$1"; }
 max_file() { sort -n "$1" | tail -n1; }
 
-fmt_ms_us() {
-    awk -v u="$1" 'BEGIN {m=u/1000; if(m<1) printf "%.2f",m; else if(m<10) printf "%.1f",m; else printf "%.0f",m}'
+fmt_trim() {
+    awk -v v="$1" -v d="${2:-2}" 'BEGIN {
+        if (d==0) s=sprintf("%.0f",v);
+        else if (d==1) s=sprintf("%.1f",v);
+        else s=sprintf("%.2f",v);
+        if (index(s,".")) {sub(/0+$/, "", s); sub(/\.$/, "", s)}
+        printf "%s", s
+    }'
 }
-fmt_ms() {
-    awk -v m="$1" 'BEGIN {if(m<1) printf "%.2f",m; else if(m<10) printf "%.1f",m; else printf "%.0f",m}'
+
+fmt_latency_us() {
+    awk -v u="$1" 'function trim(s){if(index(s,".")){sub(/0+$/, "", s);sub(/\.$/, "", s)}return s}
+        BEGIN {
+            if (u < 1000) printf "%.0fus", u;
+            else {
+                m=u/1000;
+                if (m < 10) s=sprintf("%.2f",m);
+                else if (m < 100) s=sprintf("%.1f",m);
+                else s=sprintf("%.0f",m);
+                printf "%sms", trim(s);
+            }
+        }'
 }
-fmt_kops() { awk -v v="$1" 'BEGIN {printf "%.1f",v/1000}' ; }
-fmt_gbps() { awk -v v="$1" 'BEGIN {printf "%.2f",v/1000000000}' ; }
-fmt_gibps_mib() { awk -v v="$1" 'BEGIN {printf "%.2f",v/1024}' ; }
-fmt_cv() { awk -v v="$1" 'BEGIN {if(v<10) printf "%.1f",v; else printf "%.0f",v}' ; }
-fmt_pct() {
-    awk -v v="$1" 'BEGIN {if(v==0) printf "0"; else if(v<0.001) printf "<.001"; else if(v<0.1) printf "%.3f",v; else printf "%.2f",v}'
+
+fmt_latency_ms() {
+    awk -v m="$1" 'function trim(s){if(index(s,".")){sub(/0+$/, "", s);sub(/\.$/, "", s)}return s}
+        BEGIN {
+            u=m*1000;
+            if (u < 1000) printf "%.0fus", u;
+            else {
+                if (m < 10) s=sprintf("%.2f",m);
+                else if (m < 100) s=sprintf("%.1f",m);
+                else s=sprintf("%.0f",m);
+                printf "%sms", trim(s);
+            }
+        }'
+}
+
+fmt_x25519() {
+    awk -v v="$1" 'function trim(s){if(index(s,".")){sub(/0+$/, "", s);sub(/\.$/, "", s)}return s}
+        BEGIN {
+            if (v >= 1000) {x=v/1000; s=(x<10?sprintf("%.2f",x):x<100?sprintf("%.1f",x):sprintf("%.0f",x)); printf "%sk/s",trim(s)}
+            else printf "%.0f/s",v
+        }'
+}
+
+fmt_crypto() {
+    awk -v v="$1" 'function trim(s){if(index(s,".")){sub(/0+$/, "", s);sub(/\.$/, "", s)}return s}
+        BEGIN {
+            if (v >= 1000000000) {x=v/1000000000; s=(x<10?sprintf("%.2f",x):x<100?sprintf("%.1f",x):sprintf("%.0f",x)); printf "%sG/s",trim(s)}
+            else {x=v/1000000; s=(x<10?sprintf("%.2f",x):x<100?sprintf("%.1f",x):sprintf("%.0f",x)); printf "%sM/s",trim(s)}
+        }'
+}
+
+fmt_ram() {
+    awk -v v="$1" 'function trim(s){if(index(s,".")){sub(/0+$/, "", s);sub(/\.$/, "", s)}return s}
+        BEGIN {
+            if (v >= 1024) {x=v/1024; s=(x<10?sprintf("%.2f",x):x<100?sprintf("%.1f",x):sprintf("%.0f",x)); printf "%sGi/s",trim(s)}
+            else {s=(v<10?sprintf("%.2f",v):v<100?sprintf("%.1f",v):sprintf("%.0f",v)); printf "%sMi/s",trim(s)}
+        }'
+}
+
+fmt_cv() { awk -v v="$1" 'BEGIN {printf "%.0f",v}' ; }
+sum_file() { awk '{s+=$1} END {printf "%.0f",s+0}' "$1"; }
+
+anomaly_flag() {
+    awk -v i="$1" -v l="$2" -v x="$3" -v a="$4" -v c="$5" -v r="$6" -v d="$7" \
+        -v im="$8" -v lm="$9" -v xm="${10}" -v am="${11}" -v cm="${12}" -v rm="${13}" -v dm="${14}" 'BEGIN {
+        it=(im*2.5 > im+500 ? im*2.5 : im+500);
+        lt=(lm*2.5 > lm+500 ? lm*2.5 : lm+500);
+        dt=(dm*2.5 > dm+0.5 ? dm*2.5 : dm+0.5);
+        bad=(i>it || l>lt || d>dt || (xm>0 && x<xm*.8) || (am>0 && a<am*.8) || (cm>0 && c<cm*.8) || (rm>0 && r<rm*.8));
+        if (bad) printf "!";
+    }'
 }
 
 lat_score() {
@@ -362,6 +437,8 @@ color_score() {
 }
 
 main() {
+    info "VPSBench ${SCRIPT_VERSION}: starting"
+    info "Checking system and dependencies"
     check_os_and_install
     TMP_BASE="$(mktemp -d /tmp/vpsbench.XXXXXX)" || die "mktemp failed"
     setup_cyclic_cmd
@@ -425,7 +502,7 @@ main() {
         printf '%s\n' "$load_p999" >>"$TMP_BASE/load_p999.dat"; printf '%s\n' "$load_max" >>"$TMP_BASE/load_max.dat"
         printf '%s\n' "$load_gt1" >>"$TMP_BASE/load_gt1.dat"; printf '%s\n' "$load_gt5" >>"$TMP_BASE/load_gt5.dat"; printf '%s\n' "$load_gt10" >>"$TMP_BASE/load_gt10.dat"
 
-        printf '%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$i" "$idle_p999" "$load_p999" "$x255" "$aes" "$cha" "$ram" "$disk" >>"$TMP_BASE/iterations.tsv"
+        printf '%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$i" "$idle_p999" "$load_p999" "$idle_max" "$load_max" "$x255" "$aes" "$cha" "$ram" "$disk" >>"$TMP_BASE/iterations.tsv"
 
         if (( i < ITERATIONS )); then
             printf '%s cooldown %ds перед следующей итерацией%s\n' "$DIM" "$COOLDOWN_SEC" "$RESET"
@@ -434,7 +511,7 @@ main() {
     done
 
     DONE_WORK=$TOTAL_WORK
-    [[ -t 1 ]] && printf '\r%s[100%%]%s benchmark завершён%s\n\n' "$BOLD" "$RESET" "$CLR" || say "[100%] benchmark завершён"
+    [[ -t 1 ]] && printf '\r%s[100%%]%s benchmark complete%s\n\n' "$BOLD" "$RESET" "$CLR" || say "[100%] benchmark complete"
 
     local idle_med idle_cv idle_min idle_worst idle_mean load_med load_cv load_min load_worst load_mean
     local x_med x_cv x_min x_max x_mean aes_med aes_cv aes_min aes_max aes_mean
@@ -462,39 +539,55 @@ main() {
     stab_f="$(awk -v i="$idle_cv" -v l="$load_cv" -v x="$x_cv" -v a="$aes_cv" -v c="$cha_cv" -v r="$ram_cv" -v d="$disk_cv" 'BEGIN{v=i*.25+l*.35+x*.10+a*.075+c*.075+r*.05+d*.10; s=100-v; if(s<0)s=0;if(s>100)s=100;printf "%.2f",s}')"
     resp="$(awk -v v="$resp_f" 'BEGIN{printf "%d",v+0.5}')"; stab="$(awk -v v="$stab_f" 'BEGIN{printf "%d",v+0.5}')"
 
-    say "${BOLD}РЕЗУЛЬТАТ ПО ИТЕРАЦИЯМ${RESET}"
-    printf '%-4s %8s %8s %8s %8s %8s %8s %8s\n' "#" "IDLEms" "LOADms" "X25k/s" "AESGB/s" "CHAGB/s" "RAMGi/s" "DSKms"
-    while IFS=$'\t' read -r ri r_idle r_load r_x r_a r_c r_r r_d; do
-        printf '%-4s %8s %8s %8s %8s %8s %8s %8s\n' \
-            "$ri" "$(fmt_ms_us "$r_idle")" "$(fmt_ms_us "$r_load")" "$(fmt_kops "$r_x")" \
-            "$(fmt_gbps "$r_a")" "$(fmt_gbps "$r_c")" "$(fmt_gibps_mib "$r_r")" "$(fmt_ms "$r_d")"
+    local idle_gt1_count idle_gt5_count idle_gt10_count load_gt1_count load_gt5_count load_gt10_count
+    idle_gt1_count="$(sum_file "$TMP_BASE/idle_gt1.dat")"; idle_gt5_count="$(sum_file "$TMP_BASE/idle_gt5.dat")"; idle_gt10_count="$(sum_file "$TMP_BASE/idle_gt10.dat")"
+    load_gt1_count="$(sum_file "$TMP_BASE/load_gt1.dat")"; load_gt5_count="$(sum_file "$TMP_BASE/load_gt5.dat")"; load_gt10_count="$(sum_file "$TMP_BASE/load_gt10.dat")"
+
+    say "${BOLD}LATENCY${RESET}  ${DIM}(cyclictest p99.9; WORST = worst sample in iteration)${RESET}"
+    printf '%-5s %10s %10s %10s %3s\n' "ITER" "IDLE" "LOAD" "WORST" ""
+    printf '%s\n' "---------------------------------------------"
+    while IFS=$'\t' read -r ri r_idle r_load r_imax r_lmax r_x r_a r_c r_r r_d; do
+        local r_worst flag
+        r_worst="$(awk -v a="$r_imax" -v b="$r_lmax" 'BEGIN{print (a>b?a:b)}')"
+        flag="$(anomaly_flag "$r_idle" "$r_load" "$r_x" "$r_a" "$r_c" "$r_r" "$r_d" "$idle_med" "$load_med" "$x_med" "$aes_med" "$cha_med" "$ram_med" "$disk_med")"
+        printf '%-5s %10s %10s %10s %3s\n' "$ri" "$(fmt_latency_us "$r_idle")" "$(fmt_latency_us "$r_load")" "$(fmt_latency_us "$r_worst")" "$flag"
     done <"$TMP_BASE/iterations.tsv"
 
     say ""
-    say "${BOLD}QUICK COMPARE${RESET}  ${DIM}(median из $ITERATIONS; latency = p99.9)${RESET}"
-    printf 'RESP '; color_score "$resp"; printf '   STAB '; color_score "$stab"; printf '\n'
-    printf '%8s %8s %8s %8s %8s %8s %8s\n' "IDLEms" "LOADms" "X25k/s" "AESGB/s" "CHAGB/s" "RAMGi/s" "DSKms"
-    printf '%8s %8s %8s %8s %8s %8s %8s\n' \
-        "$(fmt_ms_us "$idle_med")" "$(fmt_ms_us "$load_med")" "$(fmt_kops "$x_med")" \
-        "$(fmt_gbps "$aes_med")" "$(fmt_gbps "$cha_med")" "$(fmt_gibps_mib "$ram_med")" "$(fmt_ms "$disk_med")"
+    say "${BOLD}PERFORMANCE${RESET}"
+    printf '%-5s %10s %10s %10s %10s %10s %3s\n' "ITER" "X25519" "AES" "CHACHA" "RAM" "DISK" ""
+    printf '%s\n' "--------------------------------------------------------------------"
+    while IFS=$'\t' read -r ri r_idle r_load r_imax r_lmax r_x r_a r_c r_r r_d; do
+        local flag
+        flag="$(anomaly_flag "$r_idle" "$r_load" "$r_x" "$r_a" "$r_c" "$r_r" "$r_d" "$idle_med" "$load_med" "$x_med" "$aes_med" "$cha_med" "$ram_med" "$disk_med")"
+        printf '%-5s %10s %10s %10s %10s %10s %3s\n' \
+            "$ri" "$(fmt_x25519 "$r_x")" "$(fmt_crypto "$r_a")" "$(fmt_crypto "$r_c")" "$(fmt_ram "$r_r")" "$(fmt_latency_ms "$r_d")" "$flag"
+    done <"$TMP_BASE/iterations.tsv"
 
     say ""
-    say "${BOLD}TAIL / STABILITY${RESET}"
-    printf 'Idle : p99.9=%sms  worst=%sms  >=1ms=%s%%  >=5ms=%s%%  var=%s%%\n' \
-        "$(fmt_ms_us "$idle_med")" "$(fmt_ms_us "$idle_max_all")" "$(fmt_pct "$idle_gt1_avg")" "$(fmt_pct "$idle_gt5_avg")" "$(fmt_cv "$idle_cv")"
-    printf 'Load : p99.9=%sms  worst=%sms  >=1ms=%s%%  >=5ms=%s%%  var=%s%%\n' \
-        "$(fmt_ms_us "$load_med")" "$(fmt_ms_us "$load_max_all")" "$(fmt_pct "$load_gt1_avg")" "$(fmt_pct "$load_gt5_avg")" "$(fmt_cv "$load_cv")"
-    printf 'Crypto var: X25519=%s%%  AES=%s%%  ChaCha=%s%%\n' "$(fmt_cv "$x_cv")" "$(fmt_cv "$aes_cv")" "$(fmt_cv "$cha_cv")"
-    printf 'RAM var=%s%%   Disk p99.9 var=%s%%\n' "$(fmt_cv "$ram_cv")" "$(fmt_cv "$disk_cv")"
+    local worst_all
+    worst_all="$(awk -v a="$idle_max_all" -v b="$load_max_all" 'BEGIN{print (a>b?a:b)}')"
+
+    say "${BOLD}RESULT${RESET}  ${DIM}(median of $ITERATIONS iterations)${RESET}"
+    printf '  RESP  '; color_score "$resp"; printf '      STAB  '; color_score "$stab"; printf '\n\n'
+    printf '  %-10s idle %-9s  load %-9s  worst %s\n' "Latency" "$(fmt_latency_us "$idle_med")" "$(fmt_latency_us "$load_med")" "$(fmt_latency_us "$worst_all")"
+    printf '  %-10s X25  %-9s  AES  %-9s  CHA   %s\n' "Crypto" "$(fmt_x25519 "$x_med")" "$(fmt_crypto "$aes_med")" "$(fmt_crypto "$cha_med")"
+    printf '  %-10s RAM  %-9s  disk %s\n' "System" "$(fmt_ram "$ram_med")" "$(fmt_latency_ms "$disk_med")"
 
     say ""
-    say "${BOLD}FINGERPRINT${RESET}"
-    printf 'RESP%02d-STAB%02d | I%s L%s | X%s A%s C%s | M%s D%s\n' \
-        "$resp" "$stab" "$(fmt_ms_us "$idle_med")" "$(fmt_ms_us "$load_med")" "$(fmt_kops "$x_med")" \
-        "$(fmt_gbps "$aes_med")" "$(fmt_gbps "$cha_med")" "$(fmt_gibps_mib "$ram_med")" "$(fmt_ms "$disk_med")"
-    say "${DIM}I/L/D = ms; X = kops/s; A/C = GB/s; M = GiB/s. RESP — эвристический индекс tail latency, STAB — межитерационная стабильность.${RESET}"
+    say "${BOLD}TAIL${RESET}  ${DIM}(spike counts across all $ITERATIONS iterations)${RESET}"
+    printf '             >1ms     >5ms    >10ms    worst\n'
+    printf '  Idle  %9s %8s %8s %10s\n' "$idle_gt1_count" "$idle_gt5_count" "$idle_gt10_count" "$(fmt_latency_us "$idle_max_all")"
+    printf '  Load  %9s %8s %8s %10s\n' "$load_gt1_count" "$load_gt5_count" "$load_gt10_count" "$(fmt_latency_us "$load_max_all")"
+
+    say ""
+    say "${BOLD}VARIATION${RESET}  ${DIM}(CV between iterations)${RESET}"
+    printf '  Idle %3s%%   Load %3s%%   Disk %3s%%   X25519 %3s%%   AES %3s%%   ChaCha %3s%%   RAM %3s%%\n' \
+        "$(fmt_cv "$idle_cv")" "$(fmt_cv "$load_cv")" "$(fmt_cv "$disk_cv")" "$(fmt_cv "$x_cv")" "$(fmt_cv "$aes_cv")" "$(fmt_cv "$cha_cv")" "$(fmt_cv "$ram_cv")"
+
+    say ""
+    say "${DIM}! marks an iteration with a large deviation from the run median. Lower latency/disk is better; higher crypto/RAM is better.${RESET}"
+
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-    main "$@"
-fi
+main "$@"

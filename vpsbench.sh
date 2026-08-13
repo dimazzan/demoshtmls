@@ -6,8 +6,9 @@ set -u
 set -o pipefail
 export LC_ALL=C
 export LANG=C
+umask 077
 
-SCRIPT_VERSION="1.2.2"
+SCRIPT_VERSION="1.3.0"
 ITERATIONS="${VPSBENCH_ITERATIONS:-5}"
 CYCLIC_SEC="${VPSBENCH_CYCLIC_SEC:-45}"
 CRYPTO_SEC="${VPSBENCH_CRYPTO_SEC:-5}"
@@ -32,19 +33,166 @@ die()  { printf '%s[x]%s %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }
 TMP_BASE=""
 FIO_FILE=""
 STRESS_PID=""
+ACTIVE_PID=""
+CLEANUP_DONE=0
+LOCK_FD=200
+LOCK_FILE=""
+RUN_BOOT_ID=""
+RUN_START_TICKS=""
+
+collect_process_tree() {
+    local root="$1" child
+    [[ "$root" =~ ^[0-9]+$ && -r "/proc/$root/task/$root/children" ]] || return 0
+    for child in $(cat "/proc/$root/task/$root/children" 2>/dev/null); do
+        collect_process_tree "$child"
+    done
+    printf '%s\n' "$root"
+}
+
+terminate_pid() {
+    local pid="${1:-}" p n
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+    kill -0 "$pid" 2>/dev/null || return 0
+
+    local pids=()
+    mapfile -t pids < <(collect_process_tree "$pid")
+    ((${#pids[@]})) || pids=("$pid")
+
+    # Signal leaves first, parent last. This prevents workers from being orphaned.
+    for p in "${pids[@]}"; do kill -TERM "$p" 2>/dev/null || true; done
+    for n in 1 2 3 4; do
+        local alive=0
+        for p in "${pids[@]}"; do kill -0 "$p" 2>/dev/null && alive=1; done
+        (( alive == 0 )) && break
+        sleep 0.25 200>&-
+    done
+    for p in "${pids[@]}"; do
+        kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null || true
+    done
+    wait "$pid" 2>/dev/null || true
+}
+
+record_pid_state() {
+    local file="$1" pid="$2" ticks uid
+    [[ -n "${TMP_BASE:-}" && -d "$TMP_BASE" && "$pid" =~ ^[0-9]+$ ]] || return 0
+    ticks="$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null || true)"
+    uid="$(awk '/^Uid:/ {print $2; exit}' "/proc/$pid/status" 2>/dev/null || true)"
+    [[ "$ticks" =~ ^[0-9]+$ && "$uid" =~ ^[0-9]+$ ]] || return 0
+    printf '%s %s %s %s\n' "$pid" "$RUN_BOOT_ID" "$ticks" "$uid" >"$file"
+}
+
+terminate_recorded_pid() {
+    local file="$1" pid boot ticks uid current_ticks current_uid
+    [[ -r "$file" ]] || return 0
+    read -r pid boot ticks uid <"$file" || return 0
+    [[ "$pid" =~ ^[0-9]+$ && "$ticks" =~ ^[0-9]+$ && "$uid" =~ ^[0-9]+$ ]] || return 0
+    [[ "$boot" == "$RUN_BOOT_ID" && -r "/proc/$pid/stat" ]] || return 0
+    current_ticks="$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null || true)"
+    current_uid="$(awk '/^Uid:/ {print $2; exit}' "/proc/$pid/status" 2>/dev/null || true)"
+    [[ "$current_ticks" == "$ticks" && "$current_uid" == "$uid" && "$uid" == "$EUID" ]] || return 0
+    terminate_pid "$pid"
+}
+
 cleanup() {
-    if [[ -n "${STRESS_PID:-}" ]] && kill -0 "$STRESS_PID" 2>/dev/null; then
-        kill "$STRESS_PID" 2>/dev/null || true
-        wait "$STRESS_PID" 2>/dev/null || true
-    fi
+    (( CLEANUP_DONE == 0 )) || return 0
+    CLEANUP_DONE=1
+
+    terminate_pid "${ACTIVE_PID:-}"
+    ACTIVE_PID=""
+    [[ -n "${TMP_BASE:-}" ]] && rm -f -- "$TMP_BASE/.active-pid" 2>/dev/null || true
+    terminate_pid "${STRESS_PID:-}"
+    STRESS_PID=""
+    [[ -n "${TMP_BASE:-}" ]] && rm -f -- "$TMP_BASE/.stress-pid" 2>/dev/null || true
+
     [[ -n "${FIO_FILE:-}" ]] && rm -f -- "$FIO_FILE" 2>/dev/null || true
     [[ -n "${TMP_BASE:-}" ]] && rm -rf -- "$TMP_BASE" 2>/dev/null || true
 }
-trap cleanup EXIT INT TERM
+
+on_signal() {
+    local name="$1" code="$2"
+    warn "Получен сигнал $name; останавливаю активный тест и очищаю временные файлы"
+    exit "$code"
+}
+
+trap cleanup EXIT
+trap 'on_signal HUP 129' HUP
+trap 'on_signal INT 130' INT
+trap 'on_signal TERM 143' TERM
+
+acquire_lock() {
+    command -v flock >/dev/null 2>&1 || return 0
+
+    if [[ -d /run/lock && -w /run/lock ]]; then
+        LOCK_FILE="/run/lock/vpsbench.lock"
+    else
+        LOCK_FILE="${TMPDIR:-/tmp}/.vpsbench-${EUID}.lock"
+    fi
+
+    exec 200>"$LOCK_FILE" || die "Не удалось открыть lock-файл: $LOCK_FILE"
+    if ! flock -w 5 200; then
+        die "VPSBench уже запущен на этом сервере (lock занят более 5 секунд)."
+    fi
+}
+
+cleanup_stale_artifacts() {
+    local age_min="${VPSBENCH_STALE_MINUTES:-360}"
+    [[ "$age_min" =~ ^[0-9]+$ ]] || age_min=360
+    (( age_min >= 60 )) || age_min=60
+
+    local removed=0 path dir owner pid boot ticks live current_ticks user_name
+    user_name="$(id -un)"
+    RUN_BOOT_ID="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || printf unknown)"
+
+    # v1.3+ run directories carry an owner marker. If the exact process no longer
+    # exists (or the machine rebooted), their artifacts can be removed immediately.
+    while IFS= read -r -d '' path; do
+        owner="$path/.vpsbench-owner"
+        if [[ -r "$owner" ]]; then
+            read -r pid boot ticks <"$owner" || true
+            live=0
+            if [[ "$pid" =~ ^[0-9]+$ && "$ticks" =~ ^[0-9]+$ && "$boot" == "$RUN_BOOT_ID" && -r "/proc/$pid/stat" ]]; then
+                current_ticks="$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null || true)"
+                [[ "$current_ticks" == "$ticks" ]] && live=1
+            fi
+            if (( live == 0 )); then
+                terminate_recorded_pid "$path/.active-pid"
+                terminate_recorded_pid "$path/.stress-pid"
+                for dir in /var/tmp "${HOME:-}" "${VPSBENCH_FIO_DIR:-}"; do
+                    [[ -n "$dir" && -d "$dir" ]] || continue
+                    find "$dir" -maxdepth 1 -type f -user "$user_name" \
+                        \( -name ".vpsbench-fio-${pid}.*" -o -name ".vpsbench-fio-${pid}.bin" \) \
+                        -delete 2>/dev/null || true
+                done
+                rm -rf -- "$path" 2>/dev/null && ((removed+=1)) || true
+            fi
+        elif find "$path" -maxdepth 0 -mmin "+$age_min" -print -quit 2>/dev/null | grep -q .; then
+            # Legacy run directory from versions without owner markers.
+            rm -rf -- "$path" 2>/dev/null && ((removed+=1)) || true
+        fi
+    done < <(find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -user "$user_name" -name 'vpsbench.*' -print0 2>/dev/null)
+
+    # Legacy/unassociated fio artifacts are removed only after a conservative age.
+    for dir in /var/tmp "${HOME:-}" "${VPSBENCH_FIO_DIR:-}"; do
+        [[ -n "$dir" && -d "$dir" && -w "$dir" ]] || continue
+        while IFS= read -r -d '' path; do
+            rm -f -- "$path" 2>/dev/null && ((removed+=1)) || true
+        done < <(find "$dir" -maxdepth 1 -type f -user "$user_name" \
+            \( -name '.vpsbench-fio.*' -o -name '.vpsbench-fio-*' \) \
+            -mmin "+$age_min" -print0 2>/dev/null)
+    done
+
+    (( removed == 0 )) || info "Удалены осиротевшие/старые временные файлы VPSBench: $removed"
+}
+
+write_owner_marker() {
+    RUN_BOOT_ID="${RUN_BOOT_ID:-$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || printf unknown)}"
+    RUN_START_TICKS="$(awk '{print $22}' /proc/$$/stat 2>/dev/null || printf 0)"
+    printf '%s %s %s\n' "$$" "$RUN_BOOT_ID" "$RUN_START_TICKS" >"$TMP_BASE/.vpsbench-owner"
+}
 
 is_num() { [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]; }
 
-need_cmds=(cyclictest stress-ng sysbench fio openssl jq)
+need_cmds=(cyclictest stress-ng sysbench fio openssl jq flock)
 declare -A PKG_FOR=(
     [cyclictest]="rt-tests"
     [stress-ng]="stress-ng"
@@ -52,7 +200,43 @@ declare -A PKG_FOR=(
     [fio]="fio"
     [openssl]="openssl"
     [jq]="jq"
+    [flock]="util-linux"
 )
+
+validate_config() {
+    local name value min max
+    while read -r name value min max; do
+        [[ "$value" =~ ^[0-9]+$ ]] || die "$name должен быть целым числом: $value"
+        (( value >= min && value <= max )) || die "$name вне безопасного диапазона $min..$max: $value"
+    done <<EOF
+VPSBENCH_ITERATIONS $ITERATIONS 1 20
+VPSBENCH_CYCLIC_SEC $CYCLIC_SEC 5 600
+VPSBENCH_CRYPTO_SEC $CRYPTO_SEC 1 60
+VPSBENCH_RAM_SEC $RAM_SEC 1 120
+VPSBENCH_DISK_SEC $DISK_SEC 1 120
+VPSBENCH_COOLDOWN_SEC $COOLDOWN_SEC 0 120
+VPSBENCH_HIST_MAX_US $HIST_MAX_US 10000 1000000
+VPSBENCH_FIO_SIZE_MB $FIO_SIZE_MB 64 4096
+EOF
+}
+
+recover_dpkg_if_needed() {
+    command -v dpkg >/dev/null 2>&1 || return 0
+    local audit
+    audit="$(dpkg --audit 2>&1 || true)"
+    [[ -n "$audit" ]] || return 0
+
+    warn "Обнаружено незавершённое состояние dpkg после предыдущей установки/обрыва"
+    info "Восстановление: dpkg --configure -a"
+    if ! DEBIAN_FRONTEND=noninteractive dpkg --configure -a; then
+        warn "dpkg --configure -a не завершился; пробую apt-get -f install"
+        DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 \
+            -f install -y --no-install-recommends \
+            || die "Не удалось восстановить состояние пакетного менеджера"
+        DEBIAN_FRONTEND=noninteractive dpkg --configure -a \
+            || die "dpkg остаётся в незавершённом состоянии"
+    fi
+}
 
 check_os_and_install() {
     [[ -r /etc/os-release ]] || die "Не найден /etc/os-release. Поддерживаются Debian/Ubuntu."
@@ -77,10 +261,11 @@ check_os_and_install() {
     if ((${#missing[@]})); then
         (( EUID == 0 )) || die "Не хватает: ${missing[*]}. Для автоматической установки запустите скрипт от root."
         info "Не хватает: ${missing[*]}"
+        recover_dpkg_if_needed
         info "apt-get update"
-        apt-get update -qq || die "apt-get update завершился ошибкой"
+        apt-get -o DPkg::Lock::Timeout=60 update -qq || die "apt-get update завершился ошибкой"
         info "apt-get install: ${pkgs[*]}"
-        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${pkgs[@]}" \
+        DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends "${pkgs[@]}" \
             || die "apt-get install завершился ошибкой"
     else
         info "Все зависимости уже установлены"
@@ -131,7 +316,7 @@ prepare_fio_file() {
         fi
     fi
 
-    FIO_FILE="$dir/.vpsbench-fio-$$.bin"
+    FIO_FILE="$(mktemp "$dir/.vpsbench-fio-$$.XXXXXX")" || die "Не удалось создать временный fio-файл в $dir"
     info "Подготовка fio-файла ${FIO_SIZE_MB} MiB в $dir (не входит в замер)"
     fio --name=prepare --filename="$FIO_FILE" --size="${FIO_SIZE_MB}M" \
         --rw=write --bs=1M --ioengine=sync --direct=1 --end_fsync=1 \
@@ -161,8 +346,10 @@ run_timed_capture() {
     local expected="$1" iter="$2" task="$3" name="$4" outfile="$5"; shift 5
     local pid start now elapsed shown pct rc next_log
     : >"$outfile"
-    "$@" >"$outfile" 2>&1 &
+    "$@" 200>&- </dev/null >"$outfile" 2>&1 &
     pid=$!
+    ACTIVE_PID="$pid"
+    record_pid_state "$TMP_BASE/.active-pid" "$pid"
     start=$(date +%s)
     shown=-1
     next_log=0
@@ -183,10 +370,12 @@ run_timed_capture() {
             progress_log "$pct" "$iter" "$task" "$name" "$elapsed" "$expected"
             next_log=$(( elapsed + 5 ))
         fi
-        sleep 1
+        sleep 1 200>&-
     done
 
     wait "$pid"; rc=$?
+    ACTIVE_PID=""
+    rm -f -- "$TMP_BASE/.active-pid" 2>/dev/null || true
     DONE_WORK=$(( DONE_WORK + expected ))
     (( DONE_WORK > TOTAL_WORK )) && DONE_WORK=$TOTAL_WORK
     pct=$(( DONE_WORK * 100 / TOTAL_WORK ))
@@ -242,23 +431,24 @@ run_cyclic() {
     if [[ "$mode" == "load" ]]; then
         name="latency CPU 50%"
         stress-ng --cpu "$(nproc)" --cpu-load 50 --cpu-load-slice 10 --cpu-method all \
-            --timeout "$((CYCLIC_SEC + 4))s" --quiet >"$stress_log" 2>&1 &
+            --timeout "$((CYCLIC_SEC + 4))s" --quiet 200>&- </dev/null >"$stress_log" 2>&1 &
         STRESS_PID=$!
-        sleep 1
+        record_pid_state "$TMP_BASE/.stress-pid" "$STRESS_PID"
+        sleep 1 200>&-
     fi
 
     if ! run_timed_capture "$CYCLIC_SEC" "$iter" "$task" "$name" "$log" \
         "${cyclic_cmd[@]}" -D "${CYCLIC_SEC}s" --histfile="$hist"; then
-        [[ -n "$STRESS_PID" ]] && kill "$STRESS_PID" 2>/dev/null || true
-        [[ -n "$STRESS_PID" ]] && wait "$STRESS_PID" 2>/dev/null || true
+        [[ -n "$STRESS_PID" ]] && terminate_pid "$STRESS_PID"
         STRESS_PID=""
+        rm -f -- "$TMP_BASE/.stress-pid" 2>/dev/null || true
         die "cyclictest завершился ошибкой; подробности: $log"
     fi
 
     if [[ -n "$STRESS_PID" ]]; then
-        kill "$STRESS_PID" 2>/dev/null || true
-        wait "$STRESS_PID" 2>/dev/null || true
+        terminate_pid "$STRESS_PID"
         STRESS_PID=""
+        rm -f -- "$TMP_BASE/.stress-pid" 2>/dev/null || true
     fi
     [[ -s "$hist" ]] || die "cyclictest не создал histogram: $hist"
 }
@@ -438,9 +628,13 @@ color_score() {
 
 main() {
     info "VPSBench ${SCRIPT_VERSION}: starting"
+    validate_config
+    acquire_lock
+    cleanup_stale_artifacts
     info "Checking system and dependencies"
     check_os_and_install
-    TMP_BASE="$(mktemp -d /tmp/vpsbench.XXXXXX)" || die "mktemp failed"
+    TMP_BASE="$(mktemp -d "${TMPDIR:-/tmp}/vpsbench.$$.XXXXXX")" || die "mktemp failed"
+    write_owner_marker
     setup_cyclic_cmd
     choose_fio_engine
 
@@ -464,10 +658,11 @@ main() {
     say "Plan:    ${ITERATIONS} итераций, ~${PER_ITER_WORK}s измерений/итерация (~$((TOTAL_WORK/60))m$((TOTAL_WORK%60))s чистого benchmark time)"
     say "Tests:   idle latency -> X25519 -> AES-GCM -> ChaCha20 -> RAM -> disk QD1 -> latency @ CPU 50%"
     say "Network: внешних соединений во время benchmark-фазы нет"
+    say "Safety:  single-run lock, signal cleanup, orphan recovery + legacy cleanup"
     say ""
 
     prepare_fio_file
-    sleep 2
+    sleep 2 200>&-
 
     local f
     for f in idle_p999 idle_max idle_gt1 idle_gt5 idle_gt10 load_p999 load_max load_gt1 load_gt5 load_gt10 x255 aes cha ram disk; do
@@ -506,7 +701,7 @@ main() {
 
         if (( i < ITERATIONS )); then
             printf '%s cooldown %ds перед следующей итерацией%s\n' "$DIM" "$COOLDOWN_SEC" "$RESET"
-            sleep "$COOLDOWN_SEC"
+            sleep "$COOLDOWN_SEC" 200>&-
         fi
     done
 

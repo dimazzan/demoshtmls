@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # VPS responsiveness benchmark for Debian 13 / Ubuntu
-# Local-only benchmark traffic: CPU/scheduler/crypto/RAM/storage.
+# Local-only benchmark traffic: CPU/scheduler/crypto/MEM/storage.
 
 set -u
 set -o pipefail
@@ -8,8 +8,8 @@ export LC_ALL=C
 export LANG=C
 umask 077
 
-SCRIPT_VERSION="1.3.0"
-ITERATIONS="${VPSBENCH_ITERATIONS:-5}"
+SCRIPT_VERSION="1.4.0"
+ITERATIONS="${VPSBENCH_ITERATIONS:-6}"
 CYCLIC_SEC="${VPSBENCH_CYCLIC_SEC:-45}"
 CRYPTO_SEC="${VPSBENCH_CRYPTO_SEC:-5}"
 RAM_SEC="${VPSBENCH_RAM_SEC:-8}"
@@ -326,6 +326,7 @@ prepare_fio_file() {
 # Weighted benchmark time, used only for terminal progress.
 PER_ITER_WORK=$(( CYCLIC_SEC + CRYPTO_SEC * 3 + RAM_SEC + DISK_SEC + CYCLIC_SEC ))
 TOTAL_WORK=$(( PER_ITER_WORK * ITERATIONS ))
+EST_RUNTIME=$(( TOTAL_WORK + COOLDOWN_SEC * (ITERATIONS - 1) + 2 ))
 DONE_WORK=0
 CURRENT_TASK=0
 LAST_VALUE=""
@@ -412,13 +413,47 @@ parse_cyclic_hist() {
     ' "$file"
 }
 
+# Aggregate multiple cyclictest histogram files.
+# Output: p99.99_us max_us count_ge_1ms count_ge_5ms count_ge_10ms total_samples
+aggregate_cyclic_hists() {
+    awk -v hist_max="$HIST_MAX_US" '
+        /^[0-9]/ {
+            b=$1+0; n=$2+0; bins[b]+=n; hist_total+=n; if (b>maxb) maxb=b;
+            if (b >= 1000) gt1+=n;
+            if (b >= 5000) gt5+=n;
+            if (b >= 10000) gt10+=n;
+        }
+        /^# Max Latencies:/ {v=$4+0; if (v>mx) mx=v}
+        /^# Histogram Overflows:/ {of+=$4+0}
+        END {
+            total=hist_total+of; gt1+=of; gt5+=of; gt10+=of;
+            if (total<=0) {printf "0 %.0f 0 0 0 0\n", mx; exit}
+            target=total*0.9999; acc=0; q=-1;
+            for (i=0; i<=maxb; i++) {
+                if (i in bins) {acc+=bins[i]; if (q<0 && acc>=target) q=i}
+            }
+            # If p99.99 lands in histogram overflow, exact latency is unknown.
+            # Use the histogram ceiling as a conservative lower bound, not MAX.
+            if (q<0) q=hist_max;
+            printf "%.0f %.0f %.0f %.0f %.0f %.0f\n", q, mx, gt1, gt5, gt10, total;
+        }
+    ' "$@"
+}
+
 cyclic_cmd=()
 setup_cyclic_cmd() {
+    local help_text
     cyclic_cmd=(cyclictest --policy=other -q -t1 -i1000 -h "$HIST_MAX_US")
-    if cyclictest --help 2>&1 | grep -q -- '--default-system'; then
+
+    # Do not use `cyclictest --help | grep -q` here: with `set -o pipefail`,
+    # grep may close the pipe early and cyclictest can exit on SIGPIPE, producing
+    # a false "option not supported" result. Capture the complete help first.
+    help_text="$(cyclictest --help 2>&1 || true)"
+    if grep -F -- '--default-system' <<<"$help_text" >/dev/null; then
         cyclic_cmd+=(--default-system)
+        info "cyclictest: --default-system enabled"
     else
-        warn "cyclictest не поддерживает --default-system: power-management tuning может немного улучшить latency"
+        warn "cyclictest действительно не поддерживает --default-system; latency results may not be directly comparable with hosts where it is available"
     fi
 }
 
@@ -475,7 +510,7 @@ run_crypto_evp() {
 
 run_memory() {
     local iter="$1" task="$2" out="$3" value
-    run_timed_capture "$RAM_SEC" "$iter" "$task" "RAM 64M seq read" "$out" \
+    run_timed_capture "$RAM_SEC" "$iter" "$task" "MEM 64M seq read" "$out" \
         sysbench memory --threads=1 --time="$RAM_SEC" --events=0 \
         --memory-block-size=64M --memory-total-size=17592186044416 --memory-access-mode=seq \
         --memory-oper=read run || die "sysbench memory завершился ошибкой: $out"
@@ -486,7 +521,9 @@ run_memory() {
 
 fio_engine="io_uring"
 choose_fio_engine() {
-    if ! fio --enghelp 2>/dev/null | grep -qw 'io_uring'; then
+    local enghelp
+    enghelp="$(fio --enghelp 2>/dev/null || true)"
+    if ! grep -qw 'io_uring' <<<"$enghelp"; then
         fio_engine="libaio"
         info "fio io_uring недоступен; используется libaio"
     fi
@@ -599,13 +636,22 @@ fmt_ram() {
 fmt_cv() { awk -v v="$1" 'BEGIN {printf "%.0f",v}' ; }
 sum_file() { awk '{s+=$1} END {printf "%.0f",s+0}' "$1"; }
 
-anomaly_flag() {
-    awk -v i="$1" -v l="$2" -v x="$3" -v a="$4" -v c="$5" -v r="$6" -v d="$7" \
-        -v im="$8" -v lm="$9" -v xm="${10}" -v am="${11}" -v cm="${12}" -v rm="${13}" -v dm="${14}" 'BEGIN {
-        it=(im*2.5 > im+500 ? im*2.5 : im+500);
-        lt=(lm*2.5 > lm+500 ? lm*2.5 : lm+500);
+latency_anomaly_flag() {
+    # Per-iteration latency anomaly only. Performance metrics must not affect this flag.
+    awk -v i="$1" -v l="$2" -v w="$3" -v im="$4" -v lm="$5" -v wm="$6" 'BEGIN {
+        it=(im*1.8 > im+500 ? im*1.8 : im+500);
+        lt=(lm*1.6 > lm+1000 ? lm*1.6 : lm+1000);
+        wt=(wm*2.0 > wm+5000 ? wm*2.0 : wm+5000);
+        if (i>it || l>lt || w>wt) printf "!";
+    }'
+}
+
+performance_anomaly_flag() {
+    # Per-iteration performance anomaly only. Disk is shown here but never enters VPN scoring.
+    awk -v x="$1" -v a="$2" -v c="$3" -v m="$4" -v d="$5" \
+        -v xm="$6" -v am="$7" -v cm="$8" -v mm="$9" -v dm="${10}" 'BEGIN {
         dt=(dm*2.5 > dm+0.5 ? dm*2.5 : dm+0.5);
-        bad=(i>it || l>lt || d>dt || (xm>0 && x<xm*.8) || (am>0 && a<am*.8) || (cm>0 && c<cm*.8) || (rm>0 && r<rm*.8));
+        bad=(d>dt || (xm>0 && x<xm*.8) || (am>0 && a<am*.8) || (cm>0 && c<cm*.8) || (mm>0 && m<mm*.8));
         if (bad) printf "!";
     }'
 }
@@ -614,6 +660,22 @@ lat_score() {
     # Log interpolation: 100 at/below good, 0 at/above bad.
     awk -v x="$1" -v good="$2" -v bad="$3" 'BEGIN {
         if(x<=good) s=100; else if(x>=bad) s=0; else s=100*(log(bad)-log(x))/(log(bad)-log(good));
+        if(s<0)s=0;if(s>100)s=100; printf "%.2f",s
+    }'
+}
+
+cv_score() {
+    # Repeatability component: full score <=2% CV, zero >=30% CV.
+    awk -v x="$1" 'BEGIN {
+        if (x<=2) s=100; else if (x>=30) s=0; else s=100*(30-x)/28;
+        if(s<0)s=0;if(s>100)s=100; printf "%.2f",s
+    }'
+}
+
+rate_score() {
+    # Linear score for spike rate expressed as events per million samples.
+    awk -v x="$1" -v good="$2" -v bad="$3" 'BEGIN {
+        if (x<=good) s=100; else if (x>=bad) s=0; else s=100*(bad-x)/(bad-good);
         if(s<0)s=0;if(s>100)s=100; printf "%.2f",s
     }'
 }
@@ -653,10 +715,10 @@ main() {
     say "Kernel:  $(uname -r) / $(uname -m)"
     say "Virt:    $virt"
     say "CPU:     $model"
-    say "vCPU:    $(nproc)    RAM: ${mem_mb} MiB    ISA: $(isa_short)"
+    say "vCPU:    $(nproc)    Mem: ${mem_mb} MiB    ISA: $(isa_short)"
     say "Load1:   $load1"
-    say "Plan:    ${ITERATIONS} итераций, ~${PER_ITER_WORK}s измерений/итерация (~$((TOTAL_WORK/60))m$((TOTAL_WORK%60))s чистого benchmark time)"
-    say "Tests:   idle latency -> X25519 -> AES-GCM -> ChaCha20 -> RAM -> disk QD1 -> latency @ CPU 50%"
+    say "Plan:    ${ITERATIONS} итераций, ~${PER_ITER_WORK}s измерений/итерация (~$((EST_RUNTIME/60))m$((EST_RUNTIME%60))s + preparation)"
+    say "Tests:   idle latency -> X25519 -> AES-GCM -> ChaCha20 -> MEM -> disk QD1 -> latency @ CPU 50%"
     say "Network: внешних соединений во время benchmark-фазы нет"
     say "Safety:  single-run lock, signal cleanup, orphan recovery + legacy cleanup"
     say ""
@@ -720,23 +782,54 @@ main() {
     read -r ram_med ram_cv ram_min ram_max ram_mean < <(calc_stats "$TMP_BASE/ram.dat")
     read -r disk_med disk_cv disk_min disk_max disk_mean < <(calc_stats "$TMP_BASE/disk.dat")
 
-    local idle_max_all load_max_all idle_gt1_avg idle_gt5_avg idle_gt10_avg load_gt1_avg load_gt5_avg load_gt10_avg
-    idle_max_all="$(max_file "$TMP_BASE/idle_max.dat")"; load_max_all="$(max_file "$TMP_BASE/load_max.dat")"
-    idle_gt1_avg="$(avg_file "$TMP_BASE/idle_gt1.dat")"; idle_gt5_avg="$(avg_file "$TMP_BASE/idle_gt5.dat")"; idle_gt10_avg="$(avg_file "$TMP_BASE/idle_gt10.dat")"
-    load_gt1_avg="$(avg_file "$TMP_BASE/load_gt1.dat")"; load_gt5_avg="$(avg_file "$TMP_BASE/load_gt5.dat")"; load_gt10_avg="$(avg_file "$TMP_BASE/load_gt10.dat")"
+    # Aggregate all cyclictest histograms. p99.99 is intentionally computed from
+    # the combined distribution, not as a median of per-iteration percentiles.
+    local idle_p9999 idle_max_all idle_gt1_count idle_gt5_count idle_gt10_count idle_samples
+    local load_p9999 load_max_all load_gt1_count load_gt5_count load_gt10_count load_samples
+    read -r idle_p9999 idle_max_all idle_gt1_count idle_gt5_count idle_gt10_count idle_samples \
+        < <(aggregate_cyclic_hists "$TMP_BASE"/cyclic-idle-*.hist)
+    read -r load_p9999 load_max_all load_gt1_count load_gt5_count load_gt10_count load_samples \
+        < <(aggregate_cyclic_hists "$TMP_BASE"/cyclic-load-*.hist)
 
-    local s_idle s_load s_imax s_lmax resp_f resp stab_f resp stab
+    local worst_all worst_med worst_cv worst_min worst_max worst_mean
+    worst_all="$(awk -v a="$idle_max_all" -v b="$load_max_all" 'BEGIN{print (a>b?a:b)}')"
+    awk -F '\t' '{print ($4>$5?$4:$5)}' "$TMP_BASE/iterations.tsv" >"$TMP_BASE/worst.dat"
+    read -r worst_med worst_cv worst_min worst_max worst_mean < <(calc_stats "$TMP_BASE/worst.dat")
+
+    # RESP: latency quality. MAX is deliberately only 10%; aggregate p99.99 carries
+    # much more information about persistent tail behaviour than one worst sample.
+    local s_idle s_load s_idle9999 s_load9999 s_worst resp_f resp
     s_idle="$(lat_score "$idle_med" 100 10000)"
     s_load="$(lat_score "$load_med" 500 20000)"
-    s_imax="$(lat_score "$idle_max_all" 2000 50000)"
-    s_lmax="$(lat_score "$load_max_all" 5000 100000)"
-    resp_f="$(awk -v a="$s_idle" -v b="$s_load" -v c="$s_imax" -v d="$s_lmax" 'BEGIN{printf "%.2f",a*.25+b*.45+c*.10+d*.20}')"
-    stab_f="$(awk -v i="$idle_cv" -v l="$load_cv" -v x="$x_cv" -v a="$aes_cv" -v c="$cha_cv" -v r="$ram_cv" -v d="$disk_cv" 'BEGIN{v=i*.25+l*.35+x*.10+a*.075+c*.075+r*.05+d*.10; s=100-v; if(s<0)s=0;if(s>100)s=100;printf "%.2f",s}')"
-    resp="$(awk -v v="$resp_f" 'BEGIN{printf "%d",v+0.5}')"; stab="$(awk -v v="$stab_f" 'BEGIN{printf "%d",v+0.5}')"
+    s_idle9999="$(lat_score "$idle_p9999" 1000 20000)"
+    s_load9999="$(lat_score "$load_p9999" 3000 30000)"
+    s_worst="$(lat_score "$worst_all" 5000 100000)"
+    resp_f="$(awk -v a="$s_idle" -v b="$s_load" -v c="$s_idle9999" -v d="$s_load9999" -v e="$s_worst" \
+        'BEGIN{printf "%.2f",a*.20+b*.35+c*.10+d*.25+e*.10}')"
+    resp="$(awk -v v="$resp_f" 'BEGIN{printf "%d",v+0.5}')"
 
-    local idle_gt1_count idle_gt5_count idle_gt10_count load_gt1_count load_gt5_count load_gt10_count
-    idle_gt1_count="$(sum_file "$TMP_BASE/idle_gt1.dat")"; idle_gt5_count="$(sum_file "$TMP_BASE/idle_gt5.dat")"; idle_gt10_count="$(sum_file "$TMP_BASE/idle_gt10.dat")"
-    load_gt1_count="$(sum_file "$TMP_BASE/load_gt1.dat")"; load_gt5_count="$(sum_file "$TMP_BASE/load_gt5.dat")"; load_gt10_count="$(sum_file "$TMP_BASE/load_gt10.dat")"
+    # STAB: repeatability + tail health. Storage is intentionally excluded because
+    # it is not on the critical path for the target VPN workload.
+    local cv_idle_s cv_load_s cv_x_s cv_aes_s cv_cha_s cv_mem_s perf_cv_s
+    local total_samples gt5_total gt10_total gt5_rate gt10_rate spike5_s spike10_s stab_f stab
+    cv_idle_s="$(cv_score "$idle_cv")"; cv_load_s="$(cv_score "$load_cv")"
+    cv_x_s="$(cv_score "$x_cv")"; cv_aes_s="$(cv_score "$aes_cv")"
+    cv_cha_s="$(cv_score "$cha_cv")"; cv_mem_s="$(cv_score "$ram_cv")"
+    perf_cv_s="$(awk -v x="$cv_x_s" -v a="$cv_aes_s" -v c="$cv_cha_s" -v m="$cv_mem_s" \
+        'BEGIN{printf "%.2f",x*.40+a*.20+c*.20+m*.20}')"
+
+    total_samples=$(( idle_samples + load_samples ))
+    gt5_total=$(( idle_gt5_count + load_gt5_count ))
+    gt10_total=$(( idle_gt10_count + load_gt10_count ))
+    gt5_rate="$(awk -v c="$gt5_total" -v n="$total_samples" 'BEGIN{printf "%.3f", n?c*1000000/n:0}')"
+    gt10_rate="$(awk -v c="$gt10_total" -v n="$total_samples" 'BEGIN{printf "%.3f", n?c*1000000/n:0}')"
+    spike5_s="$(rate_score "$gt5_rate" 20 500)"
+    spike10_s="$(rate_score "$gt10_rate" 2 100)"
+
+    stab_f="$(awk -v ci="$cv_idle_s" -v cl="$cv_load_s" -v cp="$perf_cv_s" \
+        -v pi="$s_idle9999" -v pl="$s_load9999" -v s5="$spike5_s" -v s10="$spike10_s" -v mw="$s_worst" \
+        'BEGIN{printf "%.2f",ci*.15+cl*.20+cp*.15+pi*.10+pl*.15+s5*.10+s10*.10+mw*.05}')"
+    stab="$(awk -v v="$stab_f" 'BEGIN{printf "%d",v+0.5}')"
 
     say "${BOLD}LATENCY${RESET}  ${DIM}(cyclictest p99.9; WORST = worst sample in iteration)${RESET}"
     printf '%-5s %10s %10s %10s %3s\n' "ITER" "IDLE" "LOAD" "WORST" ""
@@ -744,44 +837,42 @@ main() {
     while IFS=$'\t' read -r ri r_idle r_load r_imax r_lmax r_x r_a r_c r_r r_d; do
         local r_worst flag
         r_worst="$(awk -v a="$r_imax" -v b="$r_lmax" 'BEGIN{print (a>b?a:b)}')"
-        flag="$(anomaly_flag "$r_idle" "$r_load" "$r_x" "$r_a" "$r_c" "$r_r" "$r_d" "$idle_med" "$load_med" "$x_med" "$aes_med" "$cha_med" "$ram_med" "$disk_med")"
+        flag="$(latency_anomaly_flag "$r_idle" "$r_load" "$r_worst" "$idle_med" "$load_med" "$worst_med")"
         printf '%-5s %10s %10s %10s %3s\n' "$ri" "$(fmt_latency_us "$r_idle")" "$(fmt_latency_us "$r_load")" "$(fmt_latency_us "$r_worst")" "$flag"
     done <"$TMP_BASE/iterations.tsv"
 
     say ""
     say "${BOLD}PERFORMANCE${RESET}"
-    printf '%-5s %10s %10s %10s %10s %10s %3s\n' "ITER" "X25519" "AES" "CHACHA" "RAM" "DISK" ""
+    printf '%-5s %10s %10s %10s %10s %10s %3s\n' "ITER" "X25519" "AES" "CHACHA" "MEM" "DISK" ""
     printf '%s\n' "--------------------------------------------------------------------"
     while IFS=$'\t' read -r ri r_idle r_load r_imax r_lmax r_x r_a r_c r_r r_d; do
         local flag
-        flag="$(anomaly_flag "$r_idle" "$r_load" "$r_x" "$r_a" "$r_c" "$r_r" "$r_d" "$idle_med" "$load_med" "$x_med" "$aes_med" "$cha_med" "$ram_med" "$disk_med")"
+        flag="$(performance_anomaly_flag "$r_x" "$r_a" "$r_c" "$r_r" "$r_d" "$x_med" "$aes_med" "$cha_med" "$ram_med" "$disk_med")"
         printf '%-5s %10s %10s %10s %10s %10s %3s\n' \
             "$ri" "$(fmt_x25519 "$r_x")" "$(fmt_crypto "$r_a")" "$(fmt_crypto "$r_c")" "$(fmt_ram "$r_r")" "$(fmt_latency_ms "$r_d")" "$flag"
     done <"$TMP_BASE/iterations.tsv"
 
     say ""
-    local worst_all
-    worst_all="$(awk -v a="$idle_max_all" -v b="$load_max_all" 'BEGIN{print (a>b?a:b)}')"
-
-    say "${BOLD}RESULT${RESET}  ${DIM}(median of $ITERATIONS iterations)${RESET}"
+    say "${BOLD}RESULT${RESET}  ${DIM}(median p99.9 / performance across $ITERATIONS iterations)${RESET}"
     printf '  RESP  '; color_score "$resp"; printf '      STAB  '; color_score "$stab"; printf '\n\n'
     printf '  %-10s idle %-9s  load %-9s  worst %s\n' "Latency" "$(fmt_latency_us "$idle_med")" "$(fmt_latency_us "$load_med")" "$(fmt_latency_us "$worst_all")"
     printf '  %-10s X25  %-9s  AES  %-9s  CHA   %s\n' "Crypto" "$(fmt_x25519 "$x_med")" "$(fmt_crypto "$aes_med")" "$(fmt_crypto "$cha_med")"
-    printf '  %-10s RAM  %-9s  disk %s\n' "System" "$(fmt_ram "$ram_med")" "$(fmt_latency_ms "$disk_med")"
+    printf '  %-10s MEM  %-9s  disk %s\n' "System" "$(fmt_ram "$ram_med")" "$(fmt_latency_ms "$disk_med")"
 
     say ""
-    say "${BOLD}TAIL${RESET}  ${DIM}(spike counts across all $ITERATIONS iterations)${RESET}"
-    printf '             >1ms     >5ms    >10ms    worst\n'
-    printf '  Idle  %9s %8s %8s %10s\n' "$idle_gt1_count" "$idle_gt5_count" "$idle_gt10_count" "$(fmt_latency_us "$idle_max_all")"
-    printf '  Load  %9s %8s %8s %10s\n' "$load_gt1_count" "$load_gt5_count" "$load_gt10_count" "$(fmt_latency_us "$load_max_all")"
+    say "${BOLD}TAIL${RESET}  ${DIM}(aggregate histogram across all $ITERATIONS iterations)${RESET}"
+    printf '            p99.99    >=1ms    >=5ms   >=10ms      worst\n'
+    printf '  Idle  %10s %8s %8s %8s %10s\n' "$(fmt_latency_us "$idle_p9999")" "$idle_gt1_count" "$idle_gt5_count" "$idle_gt10_count" "$(fmt_latency_us "$idle_max_all")"
+    printf '  Load  %10s %8s %8s %8s %10s\n' "$(fmt_latency_us "$load_p9999")" "$load_gt1_count" "$load_gt5_count" "$load_gt10_count" "$(fmt_latency_us "$load_max_all")"
 
     say ""
     say "${BOLD}VARIATION${RESET}  ${DIM}(CV between iterations)${RESET}"
-    printf '  Idle %3s%%   Load %3s%%   Disk %3s%%   X25519 %3s%%   AES %3s%%   ChaCha %3s%%   RAM %3s%%\n' \
-        "$(fmt_cv "$idle_cv")" "$(fmt_cv "$load_cv")" "$(fmt_cv "$disk_cv")" "$(fmt_cv "$x_cv")" "$(fmt_cv "$aes_cv")" "$(fmt_cv "$cha_cv")" "$(fmt_cv "$ram_cv")"
+    printf '  Idle %3s%%   Load %3s%%   X25519 %3s%%   AES %3s%%   ChaCha %3s%%   MEM %3s%%   Disk %3s%%\n' \
+        "$(fmt_cv "$idle_cv")" "$(fmt_cv "$load_cv")" "$(fmt_cv "$x_cv")" "$(fmt_cv "$aes_cv")" "$(fmt_cv "$cha_cv")" "$(fmt_cv "$ram_cv")" "$(fmt_cv "$disk_cv")"
 
     say ""
-    say "${DIM}! marks an iteration with a large deviation from the run median. Lower latency/disk is better; higher crypto/RAM is better.${RESET}"
+    say "${DIM}! is local to each table: latency deviations do not mark PERFORMANCE and vice versa.${RESET}"
+    say "${DIM}RESP = p99.9 + aggregate p99.99 + small MAX penalty. STAB = repeatability + tail/spike health. Disk is shown but not scored.${RESET}"
 
 }
 

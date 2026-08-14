@@ -8,7 +8,7 @@ export LC_ALL=C
 export LANG=C
 umask 077
 
-SCRIPT_VERSION="1.7.0"
+SCRIPT_VERSION="1.8.0"
 ITERATIONS="${VPSBENCH_ITERATIONS:-6}"
 CYCLIC_SEC="${VPSBENCH_CYCLIC_SEC:-45}"
 CRYPTO_SEC="${VPSBENCH_CRYPTO_SEC:-5}"
@@ -528,7 +528,7 @@ setup_cyclic_cmd() {
         CYCLIC_DEFAULT_SYSTEM=1
         info "cyclictest: --default-system enabled"
     else
-        warn "cyclictest действительно не поддерживает --default-system; latency results may not be directly comparable with hosts where it is available"
+        warn "cyclictest не поддерживает --default-system: LATENCY/STABILITY/SCORE будут N/A; CRYPTO/SYSTEM останутся валидными"
     fi
 }
 
@@ -714,6 +714,10 @@ fmt_ram() {
 }
 
 fmt_cv() { awk -v v="$1" 'BEGIN {printf "%.0f",v}' ; }
+fmt_percent() {
+    awk -v v="$1" 'function trim(s){if(index(s,".")){sub(/0+$/, "", s);sub(/\.$/, "", s)}return s}
+        BEGIN {s=(v<10?sprintf("%.1f",v):sprintf("%.0f",v)); printf "%s%%",trim(s)}'
+}
 latency_anomaly_flag() {
     # Per-iteration latency anomaly only. Performance metrics must not affect this flag.
     awk -v i="$1" -v l="$2" -v w="$3" -v im="$4" -v lm="$5" -v wm="$6" 'BEGIN {
@@ -753,19 +757,34 @@ perf_score() {
     }'
 }
 
-cv_score() {
-    # Repeatability component: full score <=2% CV, zero >=30% CV.
-    awk -v x="$1" 'BEGIN {
-        if (x<=2) s=100; else if (x>=30) s=0; else s=100*(30-x)/28;
+vpn_lower_score() {
+    # Lower is better. Piecewise absolute VPN-oriented scale:
+    # <=t1 ideal (100), t2 excellent (90), t3 normal (75),
+    # t4 questionable (45), >=t5 poor (0).
+    awk -v x="$1" -v t1="$2" -v t2="$3" -v t3="$4" -v t4="$5" -v t5="$6" 'BEGIN {
+        if (x<=t1) s=100;
+        else if (x<=t2) s=100-(x-t1)*(10/(t2-t1));
+        else if (x<=t3) s=90-(x-t2)*(15/(t3-t2));
+        else if (x<=t4) s=75-(x-t3)*(30/(t4-t3));
+        else if (x<t5) s=45-(x-t4)*(45/(t5-t4));
+        else s=0;
         if(s<0)s=0;if(s>100)s=100; printf "%.2f",s
     }'
 }
 
-rate_score() {
-    # Linear score for spike rate expressed as events per million samples.
-    awk -v x="$1" -v good="$2" -v bad="$3" 'BEGIN {
-        if (x<=good) s=100; else if (x>=bad) s=0; else s=100*(bad-x)/(bad-good);
-        if(s<0)s=0;if(s>100)s=100; printf "%.2f",s
+drift_from_median() {
+    # Maximum absolute deviation of per-iteration p99.9 from its median.
+    awk -v med="$1" -v mn="$2" -v mx="$3" 'BEGIN {
+        a=med-mn; b=mx-med; if(a<0)a=-a; if(b<0)b=-b;
+        printf "%.3f", (a>b?a:b)
+    }'
+}
+
+drop_from_median() {
+    # Worst throughput drop relative to the median; higher throughput is better.
+    awk -v med="$1" -v mn="$2" 'BEGIN {
+        if (med<=0 || mn>=med) d=0; else d=(med-mn)*100/med;
+        if(d<0)d=0; printf "%.3f",d
     }'
 }
 
@@ -806,7 +825,7 @@ create_debug_json() {
     # One self-contained file: enough raw per-iteration measurements to
     # recalculate statistics/weights, plus current aggregate/scoring inputs.
     jq -n \
-        --arg schema "1" \
+        --arg schema "2" \
         --arg version "$SCRIPT_VERSION" \
         --arg state "$state" \
         --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -861,6 +880,10 @@ create_debug_json() {
             hist_max_us: $hist_max_us, fio_size_mib: $fio_size_mib,
             fio_engine: $fio_engine, cyclic_default_system: $default_system
           },
+          compatibility: {
+            latency_comparable: $default_system,
+            latency_requirement: "cyclictest --default-system"
+          },
           completed_iterations: $n,
           iterations: [range(0;$n) as $k |
             ($i[$k]) as $r | ($c[$k]) as $d |
@@ -878,54 +901,84 @@ create_debug_json() {
 
     if (( RUN_COMPLETED == 1 )); then
         jq \
-            --argjson idle_med "$idle_med" --argjson idle_cv "$idle_cv" --argjson idle_min "$idle_min" --argjson idle_max_p999 "$idle_worst" --argjson idle_mean "$idle_mean" \
-            --argjson load_med "$load_med" --argjson load_cv "$load_cv" --argjson load_min "$load_min" --argjson load_max_p999 "$load_worst" --argjson load_mean "$load_mean" \
+            --argjson latency_comparable "$latency_comparable" \
+            --argjson idle_med "$idle_med" --argjson idle_cv "$idle_cv" --argjson idle_min "$idle_min" --argjson idle_max_p999 "$idle_worst" --argjson idle_mean "$idle_mean" --argjson idle_drift "$idle_drift_us" \
+            --argjson load_med "$load_med" --argjson load_cv "$load_cv" --argjson load_min "$load_min" --argjson load_max_p999 "$load_worst" --argjson load_mean "$load_mean" --argjson load_drift "$load_drift_us" \
             --argjson idle_p9999 "$idle_p9999" --argjson idle_max "$idle_max_all" --argjson idle_ge1 "$idle_gt1_count" --argjson idle_ge5 "$idle_gt5_count" --argjson idle_ge10 "$idle_gt10_count" --argjson idle_samples "$idle_samples" \
             --argjson load_p9999 "$load_p9999" --argjson load_max "$load_max_all" --argjson load_ge1 "$load_gt1_count" --argjson load_ge5 "$load_gt5_count" --argjson load_ge10 "$load_gt10_count" --argjson load_samples "$load_samples" \
-            --argjson x_med "$x_med" --argjson x_cv "$x_cv" --argjson x_min "$x_min" --argjson x_max "$x_max" --argjson x_mean "$x_mean" \
-            --argjson aes_med "$aes_med" --argjson aes_cv "$aes_cv" --argjson aes_min "$aes_min" --argjson aes_max "$aes_max" --argjson aes_mean "$aes_mean" \
-            --argjson cha_med "$cha_med" --argjson cha_cv "$cha_cv" --argjson cha_min "$cha_min" --argjson cha_max "$cha_max" --argjson cha_mean "$cha_mean" \
-            --argjson cpu_med "$cpu_med" --argjson cpu_cv "$cpu_cv" --argjson cpu_min "$cpu_min" --argjson cpu_max "$cpu_max" --argjson cpu_mean "$cpu_mean" \
-            --argjson mem_med "$ram_med" --argjson mem_cv "$ram_cv" --argjson mem_min "$ram_min" --argjson mem_max "$ram_max" --argjson mem_mean "$ram_mean" \
+            --argjson x_med "$x_med" --argjson x_cv "$x_cv" --argjson x_min "$x_min" --argjson x_max "$x_max" --argjson x_mean "$x_mean" --argjson x_drop "$x_drop" \
+            --argjson aes_med "$aes_med" --argjson aes_cv "$aes_cv" --argjson aes_min "$aes_min" --argjson aes_max "$aes_max" --argjson aes_mean "$aes_mean" --argjson aes_drop "$aes_drop" \
+            --argjson cha_med "$cha_med" --argjson cha_cv "$cha_cv" --argjson cha_min "$cha_min" --argjson cha_max "$cha_max" --argjson cha_mean "$cha_mean" --argjson cha_drop "$cha_drop" \
+            --argjson cpu_med "$cpu_med" --argjson cpu_cv "$cpu_cv" --argjson cpu_min "$cpu_min" --argjson cpu_max "$cpu_max" --argjson cpu_mean "$cpu_mean" --argjson cpu_drop "$cpu_drop" \
+            --argjson mem_med "$ram_med" --argjson mem_cv "$ram_cv" --argjson mem_min "$ram_min" --argjson mem_max "$ram_max" --argjson mem_mean "$ram_mean" --argjson mem_drop "$mem_drop" \
             --argjson disk_med "$disk_med" --argjson disk_cv "$disk_cv" --argjson disk_min "$disk_min" --argjson disk_max "$disk_max" --argjson disk_mean "$disk_mean" \
             --argjson latency_score "$latency_score" --argjson crypto_score "$crypto_score" --argjson system_score "$system_score" --argjson overall_score "$overall_score" --argjson stability "$stab" \
+            --argjson tail_score "$tail_score" --argjson consistency_score "$consistency_score" \
             --argjson s_idle "$s_idle" --argjson s_load "$s_load" --argjson s_idle9999 "$s_idle9999" --argjson s_load9999 "$s_load9999" --argjson s_worst "$s_worst" \
             --argjson sx "$sx" --argjson sa "$sa" --argjson sc "$sc" --argjson scpu "$scpu" --argjson smem "$smem" --argjson sdisk "$sdisk" \
             --argjson gt5_rate "$gt5_rate" --argjson gt10_rate "$gt10_rate" --argjson spike5_s "$spike5_s" --argjson spike10_s "$spike10_s" \
-            --argjson perf_cv_s "$perf_cv_s" '
+            --argjson tail_idle_s "$tail_idle_s" --argjson tail_load_s "$tail_load_s" --argjson tail_worst_s "$tail_worst_s" \
+            --argjson idle_drift_s "$idle_drift_s" --argjson load_drift_s "$load_drift_s" --argjson perf_repeat_s "$perf_repeat_s" \
+            --argjson x_drop_s "$x_drop_s" --argjson aes_drop_s "$aes_drop_s" --argjson cha_drop_s "$cha_drop_s" --argjson cpu_drop_s "$cpu_drop_s" --argjson mem_drop_s "$mem_drop_s" \
+            --argjson worst_perf_drop "$worst_perf_drop" --arg worst_perf_name "$worst_perf_name" '
             . + {
+              compatibility: (.compatibility + {latency_comparable:($latency_comparable == 1)}),
               aggregate: {
                 latency: {
-                  idle: {p99_9_median_us:$idle_med, p99_99_us:$idle_p9999, worst_us:$idle_max, samples:$idle_samples, ge_1ms:$idle_ge1, ge_5ms:$idle_ge5, ge_10ms:$idle_ge10, p99_9_cv_percent:$idle_cv, p99_9_min_us:$idle_min, p99_9_max_us:$idle_max_p999, p99_9_mean_us:$idle_mean},
-                  load: {p99_9_median_us:$load_med, p99_99_us:$load_p9999, worst_us:$load_max, samples:$load_samples, ge_1ms:$load_ge1, ge_5ms:$load_ge5, ge_10ms:$load_ge10, p99_9_cv_percent:$load_cv, p99_9_min_us:$load_min, p99_9_max_us:$load_max_p999, p99_9_mean_us:$load_mean}
+                  idle: {p99_9_median_us:$idle_med, p99_99_us:$idle_p9999, worst_us:$idle_max, samples:$idle_samples, ge_1ms:$idle_ge1, ge_5ms:$idle_ge5, ge_10ms:$idle_ge10, p99_9_drift_us:$idle_drift, p99_9_cv_percent:$idle_cv, p99_9_min_us:$idle_min, p99_9_max_us:$idle_max_p999, p99_9_mean_us:$idle_mean},
+                  load: {p99_9_median_us:$load_med, p99_99_us:$load_p9999, worst_us:$load_max, samples:$load_samples, ge_1ms:$load_ge1, ge_5ms:$load_ge5, ge_10ms:$load_ge10, p99_9_drift_us:$load_drift, p99_9_cv_percent:$load_cv, p99_9_min_us:$load_min, p99_9_max_us:$load_max_p999, p99_9_mean_us:$load_mean}
                 },
                 crypto: {
-                  x25519:{median:$x_med,cv_percent:$x_cv,min:$x_min,max:$x_max,mean:$x_mean},
-                  aes:{median:$aes_med,cv_percent:$aes_cv,min:$aes_min,max:$aes_max,mean:$aes_mean},
-                  chacha:{median:$cha_med,cv_percent:$cha_cv,min:$cha_min,max:$cha_max,mean:$cha_mean}
+                  x25519:{median:$x_med,cv_percent:$x_cv,min:$x_min,max:$x_max,mean:$x_mean,worst_drop_from_median_percent:$x_drop},
+                  aes:{median:$aes_med,cv_percent:$aes_cv,min:$aes_min,max:$aes_max,mean:$aes_mean,worst_drop_from_median_percent:$aes_drop},
+                  chacha:{median:$cha_med,cv_percent:$cha_cv,min:$cha_min,max:$cha_max,mean:$cha_mean,worst_drop_from_median_percent:$cha_drop}
                 },
                 system: {
-                  cpu:{median:$cpu_med,cv_percent:$cpu_cv,min:$cpu_min,max:$cpu_max,mean:$cpu_mean},
-                  mem:{median:$mem_med,cv_percent:$mem_cv,min:$mem_min,max:$mem_max,mean:$mem_mean},
+                  cpu:{median:$cpu_med,cv_percent:$cpu_cv,min:$cpu_min,max:$cpu_max,mean:$cpu_mean,worst_drop_from_median_percent:$cpu_drop},
+                  mem:{median:$mem_med,cv_percent:$mem_cv,min:$mem_min,max:$mem_max,mean:$mem_mean,worst_drop_from_median_percent:$mem_drop},
                   disk:{median:$disk_med,cv_percent:$disk_cv,min:$disk_min,max:$disk_max,mean:$disk_mean}
                 }
               },
               scores: {
                 latency:$latency_score, crypto:$crypto_score, system:$system_score,
                 overall:$overall_score, stability:$stability,
+                tail_quality:$tail_score, consistency:$consistency_score,
                 current_subscores: {
                   latency:{idle_p99_9:$s_idle,load_p99_9:$s_load,idle_p99_99:$s_idle9999,load_p99_99:$s_load9999,worst:$s_worst},
                   crypto:{x25519:$sx,aes:$sa,chacha:$sc},
                   system:{cpu:$scpu,mem:$smem,disk:$sdisk},
-                  stability:{performance_repeatability:$perf_cv_s,ge_5ms:$spike5_s,ge_10ms:$spike10_s,ge_5ms_per_million:$gt5_rate,ge_10ms_per_million:$gt10_rate}
+                  tail_quality:{idle_p99_99:$tail_idle_s,load_p99_99:$tail_load_s,ge_5ms:$spike5_s,ge_10ms:$spike10_s,worst:$tail_worst_s,ge_5ms_per_million:$gt5_rate,ge_10ms_per_million:$gt10_rate},
+                  consistency:{idle_drift:$idle_drift_s,load_drift:$load_drift_s,performance_repeatability:$perf_repeat_s},
+                  performance_drop:{x25519:$x_drop,aes:$aes_drop,chacha:$cha_drop,cpu:$cpu_drop,mem:$mem_drop,worst:$worst_perf_drop,worst_metric:$worst_perf_name}
                 }
               },
               scoring_model: {
+                compatibility:{latency_requires_cyclic_default_system:true,incompatible_scores:["latency","overall","tail_quality","consistency","stability"]},
+                score_anchors:[100,90,75,45,0],
                 overall_weights:{latency:0.50,crypto:0.35,system:0.15},
-                latency:{weights:{idle_p99_9:0.20,load_p99_9:0.35,idle_p99_99:0.10,load_p99_99:0.25,worst:0.10},thresholds_us:{idle_p99_9:[100,10000],load_p99_9:[500,20000],idle_p99_99:[1000,20000],load_p99_99:[3000,30000],worst:[5000,100000]}},
+                latency:{
+                  weights:{idle_p99_9:0.20,load_p99_9:0.35,idle_p99_99:0.10,load_p99_99:0.25,worst:0.10},
+                  lower_is_better_anchors:{
+                    idle_p99_9_us:[500,1000,1500,2500,5000],
+                    load_p99_9_us:[1500,2500,4000,6000,12000],
+                    idle_p99_99_us:[1500,3000,5000,10000,20000],
+                    load_p99_99_us:[3000,5000,8000,15000,30000],
+                    worst_us:[5000,10000,20000,50000,100000]
+                  }
+                },
                 crypto:{weights:{x25519:0.40,aes:0.30,chacha:0.30},bad_good:{x25519_ops_s:[10000,40000],aes_B_s:[1000000000,12000000000],chacha_B_s:[700000000,4500000000]}},
                 system:{weights:{cpu:0.55,mem:0.35,disk:0.10},bad_good:{cpu_events_s:[400,2500],mem_MiB_s:[4096,45056],disk_latency_us:[300,20000]}},
-                stability:{weights:{idle_cv:0.15,load_cv:0.20,performance_repeatability:0.15,idle_p99_99:0.10,load_p99_99:0.15,ge_5ms_rate:0.10,ge_10ms_rate:0.10,worst:0.05},cv_full_zero_percent:[2,30],spike_rate_per_million:{ge_5ms_good_bad:[20,500],ge_10ms_good_bad:[2,100]}}
+                tail_quality:{
+                  weights:{idle_p99_99:0.20,load_p99_99:0.35,ge_5ms_rate:0.20,ge_10ms_rate:0.15,worst:0.10},
+                  lower_is_better_anchors:{idle_p99_99_us:[1500,3000,5000,10000,20000],load_p99_99_us:[3000,5000,8000,15000,30000],ge_5ms_per_million:[10,50,150,500,1000],ge_10ms_per_million:[2,10,30,100,200],worst_us:[5000,10000,20000,50000,100000]}
+                },
+                consistency:{
+                  weights:{idle_drift:0.35,load_drift:0.45,performance_repeatability:0.20},
+                  lower_is_better_anchors:{idle_drift_us:[150,300,600,1200,2400],load_drift_us:[250,500,1000,2000,4000],performance_drop_percent:[3,7,12,20,35]},
+                  performance_repeatability:{metric_weights:{x25519:0.30,aes:0.20,chacha:0.20,cpu:0.25,mem:0.05},weighted_metrics_share:0.80,worst_metric_share:0.20,disk_weight:0.00}
+                },
+                stability:{formula:"TAIL * (0.65 + 0.35 * CONSISTENCY / 100)",tail_is_hard_ceiling:true},
+                diagnostics:{cv_retained_in_debug_only:true,cv_used_for_scoring:false}
               }
             }' "$tmp_json" >"$tmp_full" || return 1
         mv -f -- "$tmp_full" "$tmp_json" || return 1
@@ -1069,45 +1122,92 @@ main() {
     awk -F '\t' '{print ($4>$5?$4:$5)}' "$TMP_BASE/iterations.tsv" >"$TMP_BASE/worst.dat"
     read -r worst_med worst_cv worst_min worst_max worst_mean < <(calc_stats "$TMP_BASE/worst.dat")
 
-    # LATENCY score. MAX is deliberately only 10%; aggregate p99.99 carries
-    # much more information about persistent tail behaviour than one worst sample.
+    # Strict VPN-oriented latency score. Absolute microseconds matter more than
+    # relative CV: low-latency hosts must not be punished for harmless percentage
+    # variation, and consistently slow hosts must never look "stable" just because
+    # their relative variation is small.
+    local latency_comparable="$CYCLIC_DEFAULT_SYSTEM"
     local s_idle s_load s_idle9999 s_load9999 s_worst latency_f latency_score
-    s_idle="$(lat_score "$idle_med" 100 10000)"
-    s_load="$(lat_score "$load_med" 500 20000)"
-    s_idle9999="$(lat_score "$idle_p9999" 1000 20000)"
-    s_load9999="$(lat_score "$load_p9999" 3000 30000)"
-    s_worst="$(lat_score "$worst_all" 5000 100000)"
+    s_idle="$(vpn_lower_score "$idle_med" 500 1000 1500 2500 5000)"
+    s_load="$(vpn_lower_score "$load_med" 1500 2500 4000 6000 12000)"
+    s_idle9999="$(vpn_lower_score "$idle_p9999" 1500 3000 5000 10000 20000)"
+    s_load9999="$(vpn_lower_score "$load_p9999" 3000 5000 8000 15000 30000)"
+    s_worst="$(vpn_lower_score "$worst_all" 5000 10000 20000 50000 100000)"
     latency_f="$(awk -v a="$s_idle" -v b="$s_load" -v c="$s_idle9999" -v d="$s_load9999" -v e="$s_worst" \
         'BEGIN{printf "%.2f",a*.20+b*.35+c*.10+d*.25+e*.10}')"
-    latency_score="$(awk -v v="$latency_f" 'BEGIN{printf "%d",v+0.5}')"
+    if (( latency_comparable == 1 )); then
+        latency_score="$(awk -v v="$latency_f" 'BEGIN{printf "%d",v+0.5}')"
+    else
+        latency_score="null"
+    fi
 
-    # STAB: repeatability + tail health. Storage is intentionally excluded because
-    # it is not on the critical path for the target VPN workload.
-    local cv_idle_s cv_load_s cv_x_s cv_aes_s cv_cha_s cv_cpu_s cv_mem_s perf_cv_s
-    local total_samples gt5_total gt10_total gt5_rate gt10_rate spike5_s spike10_s stab_f stab
-    cv_idle_s="$(cv_score "$idle_cv")"; cv_load_s="$(cv_score "$load_cv")"
-    cv_x_s="$(cv_score "$x_cv")"; cv_aes_s="$(cv_score "$aes_cv")"
-    cv_cha_s="$(cv_score "$cha_cv")"; cv_cpu_s="$(cv_score "$cpu_cv")"; cv_mem_s="$(cv_score "$ram_cv")"
-    perf_cv_s="$(awk -v x="$cv_x_s" -v a="$cv_aes_s" -v c="$cv_cha_s" -v p="$cv_cpu_s" -v m="$cv_mem_s" \
-        'BEGIN{printf "%.2f",x*.30+a*.15+c*.15+p*.20+m*.20}')"
-
+    # Tail quality: absolute tail latency and spike rates. This is the hard ceiling
+    # for STABILITY: a consistently bad server cannot get a high stability score.
+    local total_samples gt5_total gt10_total gt5_rate gt10_rate
+    local tail_idle_s tail_load_s spike5_s spike10_s tail_worst_s tail_f tail_score
     total_samples=$(( idle_samples + load_samples ))
     gt5_total=$(( idle_gt5_count + load_gt5_count ))
     gt10_total=$(( idle_gt10_count + load_gt10_count ))
     gt5_rate="$(awk -v c="$gt5_total" -v n="$total_samples" 'BEGIN{printf "%.3f", n?c*1000000/n:0}')"
     gt10_rate="$(awk -v c="$gt10_total" -v n="$total_samples" 'BEGIN{printf "%.3f", n?c*1000000/n:0}')"
-    spike5_s="$(rate_score "$gt5_rate" 20 500)"
-    spike10_s="$(rate_score "$gt10_rate" 2 100)"
+    tail_idle_s="$(vpn_lower_score "$idle_p9999" 1500 3000 5000 10000 20000)"
+    tail_load_s="$(vpn_lower_score "$load_p9999" 3000 5000 8000 15000 30000)"
+    spike5_s="$(vpn_lower_score "$gt5_rate" 10 50 150 500 1000)"
+    spike10_s="$(vpn_lower_score "$gt10_rate" 2 10 30 100 200)"
+    tail_worst_s="$(vpn_lower_score "$worst_all" 5000 10000 20000 50000 100000)"
+    tail_f="$(awk -v i="$tail_idle_s" -v l="$tail_load_s" -v s5="$spike5_s" -v s10="$spike10_s" -v w="$tail_worst_s" \
+        'BEGIN{printf "%.2f",i*.20+l*.35+s5*.20+s10*.15+w*.10}')"
+    if (( latency_comparable == 1 )); then
+        tail_score="$(awk -v v="$tail_f" 'BEGIN{printf "%d",v+0.5}')"
+    else
+        tail_score="null"
+    fi
 
-    stab_f="$(awk -v ci="$cv_idle_s" -v cl="$cv_load_s" -v cp="$perf_cv_s" \
-        -v pi="$s_idle9999" -v pl="$s_load9999" -v s5="$spike5_s" -v s10="$spike10_s" -v mw="$s_worst" \
-        'BEGIN{printf "%.2f",ci*.15+cl*.20+cp*.15+pi*.10+pl*.15+s5*.10+s10*.10+mw*.05}')"
-    stab="$(awk -v v="$stab_f" 'BEGIN{printf "%d",v+0.5}')"
+    # Consistency: absolute p99.9 drift plus the worst throughput drop from median.
+    # CV is still retained in debug JSON for diagnostics, but does not affect scores.
+    local idle_drift_us load_drift_us idle_drift_s load_drift_s
+    local x_drop aes_drop cha_drop cpu_drop mem_drop
+    local x_drop_s aes_drop_s cha_drop_s cpu_drop_s mem_drop_s perf_base_s perf_worst_s perf_repeat_s
+    local worst_perf_drop worst_perf_name consistency_f consistency_score stab_f stab
+    idle_drift_us="$(drift_from_median "$idle_med" "$idle_min" "$idle_worst")"
+    load_drift_us="$(drift_from_median "$load_med" "$load_min" "$load_worst")"
+    idle_drift_s="$(vpn_lower_score "$idle_drift_us" 150 300 600 1200 2400)"
+    load_drift_s="$(vpn_lower_score "$load_drift_us" 250 500 1000 2000 4000)"
 
-    # Provisional fixed performance scales (v1). These are intentionally kept
-    # independent of the current comparison set so a server's score does not
-    # change just because a faster/slower host is added later. We will calibrate
-    # the thresholds after collecting more real-world VPS results.
+    x_drop="$(drop_from_median "$x_med" "$x_min")"
+    aes_drop="$(drop_from_median "$aes_med" "$aes_min")"
+    cha_drop="$(drop_from_median "$cha_med" "$cha_min")"
+    cpu_drop="$(drop_from_median "$cpu_med" "$cpu_min")"
+    mem_drop="$(drop_from_median "$ram_med" "$ram_min")"
+    x_drop_s="$(vpn_lower_score "$x_drop" 3 7 12 20 35)"
+    aes_drop_s="$(vpn_lower_score "$aes_drop" 3 7 12 20 35)"
+    cha_drop_s="$(vpn_lower_score "$cha_drop" 3 7 12 20 35)"
+    cpu_drop_s="$(vpn_lower_score "$cpu_drop" 3 7 12 20 35)"
+    mem_drop_s="$(vpn_lower_score "$mem_drop" 3 7 12 20 35)"
+    perf_base_s="$(awk -v x="$x_drop_s" -v a="$aes_drop_s" -v c="$cha_drop_s" -v p="$cpu_drop_s" -v m="$mem_drop_s" \
+        'BEGIN{printf "%.2f",x*.30+a*.20+c*.20+p*.25+m*.05}')"
+    read -r worst_perf_drop worst_perf_name < <(awk -v x="$x_drop" -v a="$aes_drop" -v c="$cha_drop" -v p="$cpu_drop" -v m="$mem_drop" 'BEGIN {
+        v=x; n="X25519";
+        if(a>v){v=a;n="AES"} if(c>v){v=c;n="ChaCha"} if(p>v){v=p;n="CPU"} if(m>v){v=m;n="MEM"}
+        printf "%.3f %s\n",v,n
+    }')
+    perf_worst_s="$(vpn_lower_score "$worst_perf_drop" 3 7 12 20 35)"
+    perf_repeat_s="$(awk -v b="$perf_base_s" -v w="$perf_worst_s" 'BEGIN{printf "%.2f",b*.80+w*.20}')"
+
+    consistency_f="$(awk -v i="$idle_drift_s" -v l="$load_drift_s" -v p="$perf_repeat_s" \
+        'BEGIN{printf "%.2f",i*.35+l*.45+p*.20}')"
+    if (( latency_comparable == 1 )); then
+        consistency_score="$(awk -v v="$consistency_f" 'BEGIN{printf "%d",v+0.5}')"
+        stab_f="$(awk -v t="$tail_f" -v c="$consistency_f" 'BEGIN{printf "%.2f",t*(.65+.35*c/100)}')"
+        stab="$(awk -v v="$stab_f" 'BEGIN{printf "%d",v+0.5}')"
+    else
+        consistency_score="null"
+        stab_f="null"
+        stab="null"
+    fi
+
+    # Fixed performance scales. These stay independent of the current comparison
+    # set so adding a faster/slower host later does not rewrite older scores.
     local sx sa sc crypto_f crypto_score scpu smem sdisk system_f system_score overall_f overall_score
     sx="$(perf_score "$x_med" 10000 40000)"
     sa="$(perf_score "$aes_med" 1000000000 12000000000)"
@@ -1121,9 +1221,14 @@ main() {
     system_f="$(awk -v p="$scpu" -v m="$smem" -v d="$sdisk" 'BEGIN{printf "%.2f",p*.55+m*.35+d*.10}')"
     system_score="$(awk -v v="$system_f" 'BEGIN{printf "%d",v+0.5}')"
 
-    overall_f="$(awk -v l="$latency_score" -v c="$crypto_score" -v s="$system_score" \
-        'BEGIN{printf "%.2f",l*.50+c*.35+s*.15}')"
-    overall_score="$(awk -v v="$overall_f" 'BEGIN{printf "%d",v+0.5}')"
+    if (( latency_comparable == 1 )); then
+        overall_f="$(awk -v l="$latency_score" -v c="$crypto_score" -v s="$system_score" \
+            'BEGIN{printf "%.2f",l*.50+c*.35+s*.15}')"
+        overall_score="$(awk -v v="$overall_f" 'BEGIN{printf "%d",v+0.5}')"
+    else
+        overall_f="null"
+        overall_score="null"
+    fi
 
     say "${BOLD}LATENCY${RESET}  ${DIM}(cyclictest p99.9; WORST = worst sample in iteration)${RESET}"
     printf '%-5s %10s %10s %10s %3s\n' "ITER" "IDLE" "LOAD" "WORST" ""
@@ -1147,36 +1252,60 @@ main() {
     done <"$TMP_BASE/iterations.tsv"
 
     say ""
-    printf '%sLATENCY%s ' "$BOLD" "$RESET"; color_score "$latency_score"; printf '/100\n'
-    printf '  idle     %-9s (CV %s%%)   tail %s\n' "$(fmt_latency_us "$idle_med")" "$(fmt_cv "$idle_cv")" "$(fmt_latency_us "$idle_p9999")"
-    printf '  load     %-9s (CV %s%%)   tail %s\n' "$(fmt_latency_us "$load_med")" "$(fmt_cv "$load_cv")" "$(fmt_latency_us "$load_p9999")"
+    if (( latency_comparable == 1 )); then
+        printf '%sLATENCY%s ' "$BOLD" "$RESET"; color_score "$latency_score"; printf '/100\n'
+    else
+        printf '%sLATENCY%s N/A  %s(INCOMPATIBLE: --default-system unavailable)%s\n' "$BOLD" "$RESET" "$RED" "$RESET"
+    fi
+    printf '  idle     %-9s tail %-9s drift %s\n' "$(fmt_latency_us "$idle_med")" "$(fmt_latency_us "$idle_p9999")" "$(fmt_latency_us "$idle_drift_us")"
+    printf '  load     %-9s tail %-9s drift %s\n' "$(fmt_latency_us "$load_med")" "$(fmt_latency_us "$load_p9999")" "$(fmt_latency_us "$load_drift_us")"
     printf '  worst    %s\n' "$(fmt_latency_us "$worst_all")"
-    printf '  spikes   >=5ms  idle %s  load %s\n' "$idle_gt5_count" "$load_gt5_count"
-    printf '           >=10ms idle %s  load %s\n' "$idle_gt10_count" "$load_gt10_count"
+    printf '  spikes   >=5ms  idle %s  load %s  (%s/million total)\n' "$idle_gt5_count" "$load_gt5_count" "$(awk -v v="$gt5_rate" 'BEGIN{printf "%.1f",v}')"
+    printf '           >=10ms idle %s  load %s  (%s/million total)\n' "$idle_gt10_count" "$load_gt10_count" "$(awk -v v="$gt10_rate" 'BEGIN{printf "%.1f",v}')"
 
     say ""
     printf '%sCRYPTO%s ' "$BOLD" "$RESET"; color_score "$crypto_score"; printf '/100\n'
-    printf '  X25519   %-9s (CV %s%%)\n' "$(fmt_x25519 "$x_med")" "$(fmt_cv "$x_cv")"
-    printf '  AES      %-9s (CV %s%%)\n' "$(fmt_crypto "$aes_med")" "$(fmt_cv "$aes_cv")"
-    printf '  ChaCha   %-9s (CV %s%%)\n' "$(fmt_crypto "$cha_med")" "$(fmt_cv "$cha_cv")"
+    printf '  X25519   %-9s drop %s\n' "$(fmt_x25519 "$x_med")" "$(fmt_percent "$x_drop")"
+    printf '  AES      %-9s drop %s\n' "$(fmt_crypto "$aes_med")" "$(fmt_percent "$aes_drop")"
+    printf '  ChaCha   %-9s drop %s\n' "$(fmt_crypto "$cha_med")" "$(fmt_percent "$cha_drop")"
 
     say ""
     printf '%sSYSTEM%s ' "$BOLD" "$RESET"; color_score "$system_score"; printf '/100\n'
-    printf '  CPU      %-9s (CV %s%%)\n' "$(fmt_cpu "$cpu_med")" "$(fmt_cv "$cpu_cv")"
-    printf '  MEM      %-9s (CV %s%%)\n' "$(fmt_ram "$ram_med")" "$(fmt_cv "$ram_cv")"
-    printf '  Disk     %-9s (CV %s%%)\n' "$(fmt_latency_ms "$disk_med")" "$(fmt_cv "$disk_cv")"
+    printf '  CPU      %-9s drop %s\n' "$(fmt_cpu "$cpu_med")" "$(fmt_percent "$cpu_drop")"
+    printf '  MEM      %-9s drop %s\n' "$(fmt_ram "$ram_med")" "$(fmt_percent "$mem_drop")"
+    printf '  Disk     %-9s %s(diagnostic; excluded from STABILITY)%s\n' "$(fmt_latency_ms "$disk_med")" "$DIM" "$RESET"
+
+    say ""
+    if (( latency_comparable == 1 )); then
+        printf '%sSTABILITY%s ' "$BOLD" "$RESET"; color_score "$stab"; printf '/100\n'
+        printf '  tail quality  '; color_score "$tail_score"; printf '/100\n'
+        printf '  consistency   '; color_score "$consistency_score"; printf '/100\n'
+        printf '  latency drift idle %s   load %s\n' "$(fmt_latency_us "$idle_drift_us")" "$(fmt_latency_us "$load_drift_us")"
+        printf '  perf worst    %s %s\n' "$(fmt_percent "$worst_perf_drop")" "$worst_perf_name"
+    else
+        printf '%sSTABILITY%s N/A  %s(latency mode is not comparable)%s\n' "$BOLD" "$RESET" "$RED" "$RESET"
+        printf '  perf worst    %s %s\n' "$(fmt_percent "$worst_perf_drop")" "$worst_perf_name"
+    fi
 
     say ""
     say "${BOLD}RESULT${RESET}"
-    printf '  SCORE '; color_score "$overall_score"; printf '/100\n'
-    printf '  STABILITY '; color_score "$stab"; printf '/100\n'
+    if (( latency_comparable == 1 )); then
+        printf '  SCORE '; color_score "$overall_score"; printf '/100\n'
+        printf '  STABILITY '; color_score "$stab"; printf '/100  (tail %s / consistency %s)\n' "$tail_score" "$consistency_score"
+    else
+        printf '  SCORE      N/A\n'
+        printf '  STABILITY  N/A\n'
+        printf '  CRYPTO     '; color_score "$crypto_score"; printf '/100\n'
+        printf '  SYSTEM     '; color_score "$system_score"; printf '/100\n'
+    fi
 
     RUN_COMPLETED=1
     print_debug_result
 
     say ""
-    say "${DIM}CV = variation between $ITERATIONS iterations; tail = aggregate p99.99 of cyclictest.${RESET}"
-    say "${DIM}SCORE = 50% LATENCY + 35% CRYPTO + 15% SYSTEM. CRYPTO/SYSTEM scales are provisional v1 and will be calibrated after more VPS runs.${RESET}"
+    say "${DIM}drift = max absolute p99.9 deviation from the median across $ITERATIONS iterations; drop = worst throughput loss vs median.${RESET}"
+    say "${DIM}STABILITY = TAIL x (0.65 + 0.35 x CONSISTENCY/100); TAIL is therefore a hard ceiling. CV stays only in --debug JSON.${RESET}"
+    say "${DIM}SCORE = 50% LATENCY + 35% CRYPTO + 15% SYSTEM. Disk is diagnostic for VPN stability and does not enter STABILITY.${RESET}"
     say "${DIM}! is local to each table: latency deviations do not mark PERFORMANCE and vice versa.${RESET}"
 
 }

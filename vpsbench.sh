@@ -8,7 +8,7 @@ export LC_ALL=C
 export LANG=C
 umask 077
 
-SCRIPT_VERSION="1.6.0"
+SCRIPT_VERSION="1.7.0"
 ITERATIONS="${VPSBENCH_ITERATIONS:-6}"
 CYCLIC_SEC="${VPSBENCH_CYCLIC_SEC:-45}"
 CRYPTO_SEC="${VPSBENCH_CRYPTO_SEC:-5}"
@@ -20,8 +20,8 @@ HIST_MAX_US="${VPSBENCH_HIST_MAX_US:-100000}"
 FIO_SIZE_MB="${VPSBENCH_FIO_SIZE_MB:-256}"
 TASKS_PER_ITER=8
 DEBUG_MODE=0
-DEBUG_ARCHIVE=""
-DEBUG_BUNDLE_CREATED=0
+DEBUG_JSON=""
+DEBUG_JSON_CREATED=0
 RUN_COMPLETED=0
 PROGRESS_ACTIVE=0
 
@@ -41,7 +41,6 @@ FIO_FILE=""
 STRESS_PID=""
 ACTIVE_PID=""
 CLEANUP_DONE=0
-LOCK_FD=200
 LOCK_FILE=""
 RUN_BOOT_ID=""
 RUN_START_TICKS=""
@@ -50,7 +49,7 @@ usage() {
     cat <<'EOF'
 Usage: vpsbench.sh [--debug] [--help]
 
-  --debug   Print detailed per-run diagnostics and save a raw .tar.gz bundle.
+  --debug   Save one compact JSON file with per-iteration data, aggregates and scoring inputs.
   --help    Show this help.
 
 Pipe examples:
@@ -135,9 +134,9 @@ cleanup() {
     STRESS_PID=""
     [[ -n "${TMP_BASE:-}" ]] && rm -f -- "$TMP_BASE/.stress-pid" 2>/dev/null || true
 
-    if (( DEBUG_MODE == 1 && DEBUG_BUNDLE_CREATED == 0 )) && [[ -n "${TMP_BASE:-}" && -d "$TMP_BASE" ]]; then
-        if create_debug_bundle "partial"; then
-            info "Partial raw debug bundle: $DEBUG_ARCHIVE"
+    if (( DEBUG_MODE == 1 && DEBUG_JSON_CREATED == 0 )) && [[ -n "${TMP_BASE:-}" && -d "$TMP_BASE" ]]; then
+        if create_debug_json "partial"; then
+            info "Partial debug data: $DEBUG_JSON"
         fi
     fi
 
@@ -159,7 +158,7 @@ trap 'on_signal TERM 143' TERM
 acquire_lock() {
     command -v flock >/dev/null 2>&1 || return 0
 
-    local lock_dir="" fallback_base=""
+    local lock_dir=""
 
     # /run/lock is preferred on regular Linux systems, but WSL and unusual
     # mounts/ACLs may report the directory writable while opening a specific
@@ -393,7 +392,6 @@ PER_ITER_WORK=$(( CYCLIC_SEC + CRYPTO_SEC * 3 + CPU_SEC + RAM_SEC + DISK_SEC + C
 TOTAL_WORK=$(( PER_ITER_WORK * ITERATIONS ))
 EST_RUNTIME=$(( TOTAL_WORK + COOLDOWN_SEC * (ITERATIONS - 1) + 2 ))
 DONE_WORK=0
-CURRENT_TASK=0
 LAST_VALUE=""
 
 progress_line() {
@@ -516,6 +514,7 @@ aggregate_cyclic_hists() {
 }
 
 cyclic_cmd=()
+CYCLIC_DEFAULT_SYSTEM=0
 setup_cyclic_cmd() {
     local help_text
     cyclic_cmd=(cyclictest --policy=other -q -t1 -i1000 -h "$HIST_MAX_US")
@@ -526,6 +525,7 @@ setup_cyclic_cmd() {
     help_text="$(cyclictest --help 2>&1 || true)"
     if grep -F -- '--default-system' <<<"$help_text" >/dev/null; then
         cyclic_cmd+=(--default-system)
+        CYCLIC_DEFAULT_SYSTEM=1
         info "cyclictest: --default-system enabled"
     else
         warn "cyclictest действительно не поддерживает --default-system; latency results may not be directly comparable with hosts where it is available"
@@ -653,19 +653,6 @@ calc_stats() {
     '
 }
 
-avg_file() { awk '{s+=$1;n++} END {printf "%.6f", n?s/n:0}' "$1"; }
-max_file() { sort -n "$1" | tail -n1; }
-
-fmt_trim() {
-    awk -v v="$1" -v d="${2:-2}" 'BEGIN {
-        if (d==0) s=sprintf("%.0f",v);
-        else if (d==1) s=sprintf("%.1f",v);
-        else s=sprintf("%.2f",v);
-        if (index(s,".")) {sub(/0+$/, "", s); sub(/\.$/, "", s)}
-        printf "%s", s
-    }'
-}
-
 fmt_latency_us() {
     awk -v u="$1" 'function trim(s){if(index(s,".")){sub(/0+$/, "", s);sub(/\.$/, "", s)}return s}
         BEGIN {
@@ -727,8 +714,6 @@ fmt_ram() {
 }
 
 fmt_cv() { awk -v v="$1" 'BEGIN {printf "%.0f",v}' ; }
-sum_file() { awk '{s+=$1} END {printf "%.0f",s+0}' "$1"; }
-
 latency_anomaly_flag() {
     # Per-iteration latency anomaly only. Performance metrics must not affect this flag.
     awk -v i="$1" -v l="$2" -v w="$3" -v im="$4" -v lm="$5" -v wm="$6" 'BEGIN {
@@ -793,139 +778,173 @@ color_score() {
 }
 
 
-command_version_line() {
-    local name="$1"; shift
+version_line() {
     local out
-    out="$("$@" 2>&1 | head -n 1 || true)"
-    printf '%-12s %s\n' "$name" "${out:-unknown}"
+    out="$("$@" 2>&1 || true)"
+    out="${out%%$'\n'*}"
+    printf '%s' "${out:-unknown}"
 }
 
-
-capture_debug_environment() {
+create_debug_json() {
+    local state="${1:-complete}" debug_dir stamp base tmp_json tmp_full default_system_json
     (( DEBUG_MODE == 1 )) || return 0
-    local d="$TMP_BASE/environment"
-    mkdir -p "$d" 2>/dev/null || return 0
-    cp /etc/os-release "$d/os-release.txt" 2>/dev/null || true
-    cp /proc/cpuinfo "$d/proc-cpuinfo.txt" 2>/dev/null || true
-    cp /proc/meminfo "$d/proc-meminfo.txt" 2>/dev/null || true
-    cp /proc/loadavg "$d/proc-loadavg.txt" 2>/dev/null || true
-    uname -a >"$d/uname.txt" 2>&1 || true
-    lscpu >"$d/lscpu.txt" 2>&1 || true
-    systemd-detect-virt >"$d/virt.txt" 2>&1 || true
-    df -hT >"$d/df.txt" 2>&1 || true
-    findmnt >"$d/findmnt.txt" 2>&1 || true
-    lsblk -a -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS,ROTA,DISC-MAX,MODEL >"$d/lsblk.txt" 2>&1 || true
-    openssl version -a >"$d/openssl-version.txt" 2>&1 || true
-    cyclictest --version >"$d/cyclictest-version.txt" 2>&1 || true
-    stress-ng --version >"$d/stress-ng-version.txt" 2>&1 || true
-    sysbench --version >"$d/sysbench-version.txt" 2>&1 || true
-    fio --version >"$d/fio-version.txt" 2>&1 || true
-}
-
-write_debug_report() {
-    local report="$TMP_BASE/debug-report.txt"
-    {
-        echo "VPSBENCH DEBUG REPORT"
-        echo "version=$SCRIPT_VERSION"
-        echo "completed=$RUN_COMPLETED"
-        echo "timestamp_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        echo "uid=$EUID"
-        echo
-        echo "[CONFIG]"
-        printf 'iterations=%s cyclic_sec=%s crypto_sec=%s cpu_sec=%s mem_sec=%s disk_sec=%s cooldown_sec=%s hist_max_us=%s fio_size_mb=%s fio_engine=%s\n' \
-            "$ITERATIONS" "$CYCLIC_SEC" "$CRYPTO_SEC" "$CPU_SEC" "$RAM_SEC" "$DISK_SEC" "$COOLDOWN_SEC" "$HIST_MAX_US" "$FIO_SIZE_MB" "$fio_engine"
-        printf 'cyclic_cmd='; printf '%q ' "${cyclic_cmd[@]}"; printf '\n'
-        echo
-        echo "[SYSTEM]"
-        printf 'os=%s\n' "${os_name:-unknown}"
-        printf 'kernel=%s\n' "$(uname -a)"
-        printf 'virt=%s\n' "${virt:-unknown}"
-        printf 'cpu=%s\n' "${model:-unknown}"
-        printf 'vcpu=%s mem_mib=%s isa=%s\n' "$(nproc)" "${mem_mb:-unknown}" "$(isa_short)"
-        printf 'loadavg=%s\n' "$(cat /proc/loadavg 2>/dev/null || true)"
-        echo
-        echo "[VERSIONS]"
-        command_version_line cyclictest cyclictest --version
-        command_version_line stress-ng stress-ng --version
-        command_version_line sysbench sysbench --version
-        command_version_line fio fio --version
-        command_version_line openssl openssl version
-        command_version_line jq jq --version
-        echo
-        echo "[ITERATIONS]"
-        echo -e "iter\tidle_p999_us\tload_p999_us\tidle_max_us\tload_max_us\tx25519_ops_s\taes_B_s\tchacha_B_s\tcpu_events_s\tmem_MiB_s\tdisk_p999_ms"
-        cat "$TMP_BASE/iterations.tsv" 2>/dev/null || true
-        echo
-        echo "[CYCLIC_PER_ITERATION]"
-        echo -e "iter\tidle_p999_us\tidle_avg_us\tidle_max_us\tidle_ge1ms\tidle_ge5ms\tidle_ge10ms\tload_p999_us\tload_avg_us\tload_max_us\tload_ge1ms\tload_ge5ms\tload_ge10ms"
-        cat "$TMP_BASE/cyclic-details.tsv" 2>/dev/null || true
-        if (( RUN_COMPLETED == 1 )); then
-            echo
-            echo "[AGGREGATE]"
-            printf 'idle_p9999_us=%s idle_max_us=%s idle_ge1ms=%s idle_ge5ms=%s idle_ge10ms=%s idle_samples=%s\n' \
-                "$idle_p9999" "$idle_max_all" "$idle_gt1_count" "$idle_gt5_count" "$idle_gt10_count" "$idle_samples"
-            printf 'load_p9999_us=%s load_max_us=%s load_ge1ms=%s load_ge5ms=%s load_ge10ms=%s load_samples=%s\n' \
-                "$load_p9999" "$load_max_all" "$load_gt1_count" "$load_gt5_count" "$load_gt10_count" "$load_samples"
-            echo
-            echo "[STATS]"
-            printf 'idle median=%s cv=%s min=%s max=%s mean=%s\n' "$idle_med" "$idle_cv" "$idle_min" "$idle_worst" "$idle_mean"
-            printf 'load median=%s cv=%s min=%s max=%s mean=%s\n' "$load_med" "$load_cv" "$load_min" "$load_worst" "$load_mean"
-            printf 'x25519 median=%s cv=%s min=%s max=%s mean=%s\n' "$x_med" "$x_cv" "$x_min" "$x_max" "$x_mean"
-            printf 'aes median=%s cv=%s min=%s max=%s mean=%s\n' "$aes_med" "$aes_cv" "$aes_min" "$aes_max" "$aes_mean"
-            printf 'chacha median=%s cv=%s min=%s max=%s mean=%s\n' "$cha_med" "$cha_cv" "$cha_min" "$cha_max" "$cha_mean"
-            printf 'cpu median=%s cv=%s min=%s max=%s mean=%s\n' "$cpu_med" "$cpu_cv" "$cpu_min" "$cpu_max" "$cpu_mean"
-            printf 'mem median=%s cv=%s min=%s max=%s mean=%s\n' "$ram_med" "$ram_cv" "$ram_min" "$ram_max" "$ram_mean"
-            printf 'disk median=%s cv=%s min=%s max=%s mean=%s\n' "$disk_med" "$disk_cv" "$disk_min" "$disk_max" "$disk_mean"
-            echo
-            echo "[SCORE_COMPONENTS]"
-            printf 'latency_score=%s crypto_score=%s system_score=%s overall_score=%s stability=%s\n' \
-                "$latency_score" "$crypto_score" "$system_score" "$overall_score" "$stab"
-            printf 'latency_subscores idle=%s load=%s idle_p9999=%s load_p9999=%s worst=%s\n' \
-                "$s_idle" "$s_load" "$s_idle9999" "$s_load9999" "$s_worst"
-            printf 'crypto_subscores x25519=%s aes=%s chacha=%s\n' "$sx" "$sa" "$sc"
-            printf 'system_subscores cpu=%s mem=%s disk=%s\n' "$scpu" "$smem" "$sdisk"
-            printf 'spike_rates_per_million ge5=%s ge10=%s spike_scores ge5=%s ge10=%s\n' \
-                "$gt5_rate" "$gt10_rate" "$spike5_s" "$spike10_s"
-        fi
-        echo
-        echo "[RAW_FILES_IN_ARCHIVE]"
-        find "$TMP_BASE" -maxdepth 1 -type f -printf '%f\n' 2>/dev/null | sort
-    } >"$report"
-}
-
-create_debug_bundle() {
-    local state="${1:-complete}" debug_dir stamp base
-    (( DEBUG_MODE == 1 )) || return 0
-    (( DEBUG_BUNDLE_CREATED == 0 )) || return 0
+    (( DEBUG_JSON_CREATED == 0 )) || return 0
     [[ -n "${TMP_BASE:-}" && -d "$TMP_BASE" ]] || return 0
+    command -v jq >/dev/null 2>&1 || return 1
 
-    write_debug_report || true
     debug_dir="${VPSBENCH_DEBUG_DIR:-/var/tmp}"
     [[ -d "$debug_dir" && -w "$debug_dir" ]] || debug_dir="${TMPDIR:-/tmp}"
+    [[ -d "$debug_dir" && -w "$debug_dir" ]] || return 1
+
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-    base="vpsbench-debug-${SCRIPT_VERSION}-${state}-${stamp}-$$.tar.gz"
-    DEBUG_ARCHIVE="$debug_dir/$base"
-    if tar -C "$TMP_BASE" -czf "$DEBUG_ARCHIVE" . 2>/dev/null; then
-        chmod 0644 "$DEBUG_ARCHIVE" 2>/dev/null || true
-        DEBUG_BUNDLE_CREATED=1
-        return 0
+    base="vpsbench-debug-${SCRIPT_VERSION}-${state}-${stamp}-$$.json"
+    DEBUG_JSON="$debug_dir/$base"
+    tmp_json="$TMP_BASE/debug-base.json"
+    tmp_full="$TMP_BASE/debug-full.json"
+    if (( CYCLIC_DEFAULT_SYSTEM == 1 )); then default_system_json=true; else default_system_json=false; fi
+
+    # One self-contained file: enough raw per-iteration measurements to
+    # recalculate statistics/weights, plus current aggregate/scoring inputs.
+    jq -n \
+        --arg schema "1" \
+        --arg version "$SCRIPT_VERSION" \
+        --arg state "$state" \
+        --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg os "${os_name:-unknown}" \
+        --arg kernel "$(uname -r 2>/dev/null || printf unknown)" \
+        --arg arch "$(uname -m 2>/dev/null || printf unknown)" \
+        --arg virt "${virt:-unknown}" \
+        --arg cpu_model "${model:-unknown}" \
+        --arg isa "$(isa_short)" \
+        --arg cyclic_version "$(version_line cyclictest --version)" \
+        --arg stress_version "$(version_line stress-ng --version)" \
+        --arg sysbench_version "$(version_line sysbench --version)" \
+        --arg fio_version "$(version_line fio --version)" \
+        --arg openssl_version "$(version_line openssl version)" \
+        --argjson uid "$EUID" \
+        --argjson vcpu "$(nproc)" \
+        --argjson mem_mib "${mem_mb:-0}" \
+        --argjson iterations_cfg "$ITERATIONS" \
+        --argjson cyclic_sec "$CYCLIC_SEC" \
+        --argjson crypto_sec "$CRYPTO_SEC" \
+        --argjson cpu_sec "$CPU_SEC" \
+        --argjson mem_sec "$RAM_SEC" \
+        --argjson disk_sec "$DISK_SEC" \
+        --argjson cooldown_sec "$COOLDOWN_SEC" \
+        --argjson hist_max_us "$HIST_MAX_US" \
+        --argjson fio_size_mib "$FIO_SIZE_MB" \
+        --arg fio_engine "$fio_engine" \
+        --argjson default_system "$default_system_json" \
+        --rawfile it "$TMP_BASE/iterations.tsv" \
+        --rawfile cyc "$TMP_BASE/cyclic-details.tsv" '
+        def rows($s): $s | split("\n") | map(select(length > 0) | split("\t"));
+        (rows($it)) as $i |
+        (rows($cyc)) as $c |
+        ([($i|length),($c|length)] | min) as $n |
+        {
+          schema_version: ($schema|tonumber),
+          vpsbench_version: $version,
+          state: $state,
+          timestamp_utc: $timestamp,
+          system: {
+            os: $os, kernel: $kernel, arch: $arch, virtualization: $virt,
+            cpu_model: $cpu_model, vcpu: $vcpu, mem_mib: $mem_mib, isa: $isa
+          },
+          versions: {
+            cyclictest: $cyclic_version, stress_ng: $stress_version,
+            sysbench: $sysbench_version, fio: $fio_version, openssl: $openssl_version
+          },
+          config: {
+            iterations: $iterations_cfg, cyclic_sec: $cyclic_sec,
+            crypto_sec: $crypto_sec, cpu_sec: $cpu_sec, mem_sec: $mem_sec,
+            disk_sec: $disk_sec, cooldown_sec: $cooldown_sec,
+            hist_max_us: $hist_max_us, fio_size_mib: $fio_size_mib,
+            fio_engine: $fio_engine, cyclic_default_system: $default_system
+          },
+          completed_iterations: $n,
+          iterations: [range(0;$n) as $k |
+            ($i[$k]) as $r | ($c[$k]) as $d |
+            {
+              iteration: ($r[0]|tonumber),
+              latency: {
+                idle: {p99_9_us:($d[1]|tonumber), avg_us:($d[2]|tonumber), max_us:($d[3]|tonumber), ge_1ms:($d[4]|tonumber), ge_5ms:($d[5]|tonumber), ge_10ms:($d[6]|tonumber)},
+                load: {p99_9_us:($d[7]|tonumber), avg_us:($d[8]|tonumber), max_us:($d[9]|tonumber), ge_1ms:($d[10]|tonumber), ge_5ms:($d[11]|tonumber), ge_10ms:($d[12]|tonumber)}
+              },
+              crypto: {x25519_ops_s:($r[5]|tonumber), aes_B_s:($r[6]|tonumber), chacha_B_s:($r[7]|tonumber)},
+              system: {cpu_events_s:($r[8]|tonumber), mem_MiB_s:($r[9]|tonumber), disk_p99_9_ms:($r[10]|tonumber)}
+            }
+          ]
+        }' >"$tmp_json" || return 1
+
+    if (( RUN_COMPLETED == 1 )); then
+        jq \
+            --argjson idle_med "$idle_med" --argjson idle_cv "$idle_cv" --argjson idle_min "$idle_min" --argjson idle_max_p999 "$idle_worst" --argjson idle_mean "$idle_mean" \
+            --argjson load_med "$load_med" --argjson load_cv "$load_cv" --argjson load_min "$load_min" --argjson load_max_p999 "$load_worst" --argjson load_mean "$load_mean" \
+            --argjson idle_p9999 "$idle_p9999" --argjson idle_max "$idle_max_all" --argjson idle_ge1 "$idle_gt1_count" --argjson idle_ge5 "$idle_gt5_count" --argjson idle_ge10 "$idle_gt10_count" --argjson idle_samples "$idle_samples" \
+            --argjson load_p9999 "$load_p9999" --argjson load_max "$load_max_all" --argjson load_ge1 "$load_gt1_count" --argjson load_ge5 "$load_gt5_count" --argjson load_ge10 "$load_gt10_count" --argjson load_samples "$load_samples" \
+            --argjson x_med "$x_med" --argjson x_cv "$x_cv" --argjson x_min "$x_min" --argjson x_max "$x_max" --argjson x_mean "$x_mean" \
+            --argjson aes_med "$aes_med" --argjson aes_cv "$aes_cv" --argjson aes_min "$aes_min" --argjson aes_max "$aes_max" --argjson aes_mean "$aes_mean" \
+            --argjson cha_med "$cha_med" --argjson cha_cv "$cha_cv" --argjson cha_min "$cha_min" --argjson cha_max "$cha_max" --argjson cha_mean "$cha_mean" \
+            --argjson cpu_med "$cpu_med" --argjson cpu_cv "$cpu_cv" --argjson cpu_min "$cpu_min" --argjson cpu_max "$cpu_max" --argjson cpu_mean "$cpu_mean" \
+            --argjson mem_med "$ram_med" --argjson mem_cv "$ram_cv" --argjson mem_min "$ram_min" --argjson mem_max "$ram_max" --argjson mem_mean "$ram_mean" \
+            --argjson disk_med "$disk_med" --argjson disk_cv "$disk_cv" --argjson disk_min "$disk_min" --argjson disk_max "$disk_max" --argjson disk_mean "$disk_mean" \
+            --argjson latency_score "$latency_score" --argjson crypto_score "$crypto_score" --argjson system_score "$system_score" --argjson overall_score "$overall_score" --argjson stability "$stab" \
+            --argjson s_idle "$s_idle" --argjson s_load "$s_load" --argjson s_idle9999 "$s_idle9999" --argjson s_load9999 "$s_load9999" --argjson s_worst "$s_worst" \
+            --argjson sx "$sx" --argjson sa "$sa" --argjson sc "$sc" --argjson scpu "$scpu" --argjson smem "$smem" --argjson sdisk "$sdisk" \
+            --argjson gt5_rate "$gt5_rate" --argjson gt10_rate "$gt10_rate" --argjson spike5_s "$spike5_s" --argjson spike10_s "$spike10_s" \
+            --argjson perf_cv_s "$perf_cv_s" '
+            . + {
+              aggregate: {
+                latency: {
+                  idle: {p99_9_median_us:$idle_med, p99_99_us:$idle_p9999, worst_us:$idle_max, samples:$idle_samples, ge_1ms:$idle_ge1, ge_5ms:$idle_ge5, ge_10ms:$idle_ge10, p99_9_cv_percent:$idle_cv, p99_9_min_us:$idle_min, p99_9_max_us:$idle_max_p999, p99_9_mean_us:$idle_mean},
+                  load: {p99_9_median_us:$load_med, p99_99_us:$load_p9999, worst_us:$load_max, samples:$load_samples, ge_1ms:$load_ge1, ge_5ms:$load_ge5, ge_10ms:$load_ge10, p99_9_cv_percent:$load_cv, p99_9_min_us:$load_min, p99_9_max_us:$load_max_p999, p99_9_mean_us:$load_mean}
+                },
+                crypto: {
+                  x25519:{median:$x_med,cv_percent:$x_cv,min:$x_min,max:$x_max,mean:$x_mean},
+                  aes:{median:$aes_med,cv_percent:$aes_cv,min:$aes_min,max:$aes_max,mean:$aes_mean},
+                  chacha:{median:$cha_med,cv_percent:$cha_cv,min:$cha_min,max:$cha_max,mean:$cha_mean}
+                },
+                system: {
+                  cpu:{median:$cpu_med,cv_percent:$cpu_cv,min:$cpu_min,max:$cpu_max,mean:$cpu_mean},
+                  mem:{median:$mem_med,cv_percent:$mem_cv,min:$mem_min,max:$mem_max,mean:$mem_mean},
+                  disk:{median:$disk_med,cv_percent:$disk_cv,min:$disk_min,max:$disk_max,mean:$disk_mean}
+                }
+              },
+              scores: {
+                latency:$latency_score, crypto:$crypto_score, system:$system_score,
+                overall:$overall_score, stability:$stability,
+                current_subscores: {
+                  latency:{idle_p99_9:$s_idle,load_p99_9:$s_load,idle_p99_99:$s_idle9999,load_p99_99:$s_load9999,worst:$s_worst},
+                  crypto:{x25519:$sx,aes:$sa,chacha:$sc},
+                  system:{cpu:$scpu,mem:$smem,disk:$sdisk},
+                  stability:{performance_repeatability:$perf_cv_s,ge_5ms:$spike5_s,ge_10ms:$spike10_s,ge_5ms_per_million:$gt5_rate,ge_10ms_per_million:$gt10_rate}
+                }
+              },
+              scoring_model: {
+                overall_weights:{latency:0.50,crypto:0.35,system:0.15},
+                latency:{weights:{idle_p99_9:0.20,load_p99_9:0.35,idle_p99_99:0.10,load_p99_99:0.25,worst:0.10},thresholds_us:{idle_p99_9:[100,10000],load_p99_9:[500,20000],idle_p99_99:[1000,20000],load_p99_99:[3000,30000],worst:[5000,100000]}},
+                crypto:{weights:{x25519:0.40,aes:0.30,chacha:0.30},bad_good:{x25519_ops_s:[10000,40000],aes_B_s:[1000000000,12000000000],chacha_B_s:[700000000,4500000000]}},
+                system:{weights:{cpu:0.55,mem:0.35,disk:0.10},bad_good:{cpu_events_s:[400,2500],mem_MiB_s:[4096,45056],disk_latency_us:[300,20000]}},
+                stability:{weights:{idle_cv:0.15,load_cv:0.20,performance_repeatability:0.15,idle_p99_99:0.10,load_p99_99:0.15,ge_5ms_rate:0.10,ge_10ms_rate:0.10,worst:0.05},cv_full_zero_percent:[2,30],spike_rate_per_million:{ge_5ms_good_bad:[20,500],ge_10ms_good_bad:[2,100]}}
+              }
+            }' "$tmp_json" >"$tmp_full" || return 1
+        mv -f -- "$tmp_full" "$tmp_json" || return 1
     fi
-    DEBUG_ARCHIVE=""
-    return 1
+
+    cp -- "$tmp_json" "$DEBUG_JSON" || return 1
+    chmod 0644 "$DEBUG_JSON" 2>/dev/null || true
+    DEBUG_JSON_CREATED=1
+    return 0
 }
 
-print_debug_report() {
+print_debug_result() {
     (( DEBUG_MODE == 1 )) || return 0
-    write_debug_report
-    say ""
-    say "${BOLD}DEBUG${RESET}"
-    cat "$TMP_BASE/debug-report.txt"
-    if create_debug_bundle "complete"; then
+    if create_debug_json "complete"; then
         say ""
-        info "Raw debug bundle: $DEBUG_ARCHIVE"
-        info "Upload this .tar.gz for full analysis; it contains raw logs, fio JSON and cyclictest histograms."
+        info "Debug data: $DEBUG_JSON"
+        info "Upload this single JSON file for score/weight analysis."
     else
-        warn "Could not create raw debug bundle"
+        warn "Could not create debug JSON"
     fi
 }
 
@@ -941,7 +960,6 @@ main() {
     write_owner_marker
     setup_cyclic_cmd
     choose_fio_engine
-    capture_debug_environment
 
     local os_name virt model mem_mb load1
     # shellcheck disable=SC1091
@@ -1154,7 +1172,7 @@ main() {
     printf '  STABILITY '; color_score "$stab"; printf '/100\n'
 
     RUN_COMPLETED=1
-    print_debug_report
+    print_debug_result
 
     say ""
     say "${DIM}CV = variation between $ITERATIONS iterations; tail = aggregate p99.99 of cyclictest.${RESET}"

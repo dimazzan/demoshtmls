@@ -8,7 +8,7 @@ export LC_ALL=C
 export LANG=C
 umask 077
 
-SCRIPT_VERSION="1.4.0"
+SCRIPT_VERSION="1.4.1"
 ITERATIONS="${VPSBENCH_ITERATIONS:-6}"
 CYCLIC_SEC="${VPSBENCH_CYCLIC_SEC:-45}"
 CRYPTO_SEC="${VPSBENCH_CRYPTO_SEC:-5}"
@@ -122,16 +122,43 @@ trap 'on_signal TERM 143' TERM
 acquire_lock() {
     command -v flock >/dev/null 2>&1 || return 0
 
+    local lock_dir="" fallback_base=""
+
+    # /run/lock is preferred on regular Linux systems, but WSL and unusual
+    # mounts/ACLs may report the directory writable while opening a specific
+    # lock file still fails. Treat it as an optimization, never a requirement.
     if [[ -d /run/lock && -w /run/lock ]]; then
         LOCK_FILE="/run/lock/vpsbench.lock"
-    else
-        LOCK_FILE="${TMPDIR:-/tmp}/.vpsbench-${EUID}.lock"
+        if { exec 200>"$LOCK_FILE"; } 2>/dev/null; then
+            if flock -w 5 200; then
+                return 0
+            fi
+            die "VPSBench уже запущен на этом сервере (lock занят более 5 секунд)."
+        fi
     fi
 
-    exec 200>"$LOCK_FILE" || die "Не удалось открыть lock-файл: $LOCK_FILE"
+    # Secure fallback that also works under WSL. Keep it outside HOME so a
+    # sudo-run benchmark never creates root-owned files in the invoking user's
+    # home directory. The per-UID directory is mode 0700 and its owner is
+    # verified before the lock file is opened.
+    lock_dir="/tmp/.vpsbench-lock-${EUID}"
+
+    if [[ ! -d "$lock_dir" ]]; then
+        mkdir -p -- "$lock_dir" 2>/dev/null || die "Не удалось создать lock-каталог: $lock_dir"
+    fi
+    chmod 700 "$lock_dir" 2>/dev/null || true
+
+    local lock_owner
+    lock_owner="$(stat -c '%u' "$lock_dir" 2>/dev/null || printf unknown)"
+    [[ "$lock_owner" == "$EUID" ]] || die "Небезопасный владелец lock-каталога: $lock_dir (uid=$lock_owner)"
+
+    LOCK_FILE="$lock_dir/vpsbench.lock"
+    { exec 200>"$LOCK_FILE"; } 2>/dev/null || die "Не удалось открыть fallback lock-файл: $LOCK_FILE"
     if ! flock -w 5 200; then
         die "VPSBench уже запущен на этом сервере (lock занят более 5 секунд)."
     fi
+
+    info "Lock fallback: $LOCK_FILE"
 }
 
 cleanup_stale_artifacts() {

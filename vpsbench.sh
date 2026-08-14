@@ -8,16 +8,22 @@ export LC_ALL=C
 export LANG=C
 umask 077
 
-SCRIPT_VERSION="1.4.1"
+SCRIPT_VERSION="1.6.0"
 ITERATIONS="${VPSBENCH_ITERATIONS:-6}"
 CYCLIC_SEC="${VPSBENCH_CYCLIC_SEC:-45}"
 CRYPTO_SEC="${VPSBENCH_CRYPTO_SEC:-5}"
+CPU_SEC="${VPSBENCH_CPU_SEC:-8}"
 RAM_SEC="${VPSBENCH_RAM_SEC:-8}"
 DISK_SEC="${VPSBENCH_DISK_SEC:-10}"
 COOLDOWN_SEC="${VPSBENCH_COOLDOWN_SEC:-5}"
 HIST_MAX_US="${VPSBENCH_HIST_MAX_US:-100000}"
 FIO_SIZE_MB="${VPSBENCH_FIO_SIZE_MB:-256}"
-TASKS_PER_ITER=7
+TASKS_PER_ITER=8
+DEBUG_MODE=0
+DEBUG_ARCHIVE=""
+DEBUG_BUNDLE_CREATED=0
+RUN_COMPLETED=0
+PROGRESS_ACTIVE=0
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
     BOLD=$'\033[1m'; DIM=$'\033[2m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RED=$'\033[31m'; CYAN=$'\033[36m'; RESET=$'\033[0m'; CLR=$'\033[K'
@@ -39,6 +45,31 @@ LOCK_FD=200
 LOCK_FILE=""
 RUN_BOOT_ID=""
 RUN_START_TICKS=""
+
+usage() {
+    cat <<'EOF'
+Usage: vpsbench.sh [--debug] [--help]
+
+  --debug   Print detailed per-run diagnostics and save a raw .tar.gz bundle.
+  --help    Show this help.
+
+Pipe examples:
+  curl -fsSL URL | bash
+  curl -fsSL URL | bash -s -- --debug
+  curl -fsSL URL | sudo bash -s -- --debug
+EOF
+}
+
+parse_args() {
+    while (($#)); do
+        case "$1" in
+            --debug) DEBUG_MODE=1 ;;
+            -h|--help) usage; exit 0 ;;
+            *) die "Unknown option: $1" ;;
+        esac
+        shift
+    done
+}
 
 collect_process_tree() {
     local root="$1" child
@@ -103,6 +134,12 @@ cleanup() {
     terminate_pid "${STRESS_PID:-}"
     STRESS_PID=""
     [[ -n "${TMP_BASE:-}" ]] && rm -f -- "$TMP_BASE/.stress-pid" 2>/dev/null || true
+
+    if (( DEBUG_MODE == 1 && DEBUG_BUNDLE_CREATED == 0 )) && [[ -n "${TMP_BASE:-}" && -d "$TMP_BASE" ]]; then
+        if create_debug_bundle "partial"; then
+            info "Partial raw debug bundle: $DEBUG_ARCHIVE"
+        fi
+    fi
 
     [[ -n "${FIO_FILE:-}" ]] && rm -f -- "$FIO_FILE" 2>/dev/null || true
     [[ -n "${TMP_BASE:-}" ]] && rm -rf -- "$TMP_BASE" 2>/dev/null || true
@@ -239,6 +276,7 @@ validate_config() {
 VPSBENCH_ITERATIONS $ITERATIONS 1 20
 VPSBENCH_CYCLIC_SEC $CYCLIC_SEC 5 600
 VPSBENCH_CRYPTO_SEC $CRYPTO_SEC 1 60
+VPSBENCH_CPU_SEC $CPU_SEC 1 60
 VPSBENCH_RAM_SEC $RAM_SEC 1 120
 VPSBENCH_DISK_SEC $DISK_SEC 1 120
 VPSBENCH_COOLDOWN_SEC $COOLDOWN_SEC 0 120
@@ -351,7 +389,7 @@ prepare_fio_file() {
 }
 
 # Weighted benchmark time, used only for terminal progress.
-PER_ITER_WORK=$(( CYCLIC_SEC + CRYPTO_SEC * 3 + RAM_SEC + DISK_SEC + CYCLIC_SEC ))
+PER_ITER_WORK=$(( CYCLIC_SEC + CRYPTO_SEC * 3 + CPU_SEC + RAM_SEC + DISK_SEC + CYCLIC_SEC ))
 TOTAL_WORK=$(( PER_ITER_WORK * ITERATIONS ))
 EST_RUNTIME=$(( TOTAL_WORK + COOLDOWN_SEC * (ITERATIONS - 1) + 2 ))
 DONE_WORK=0
@@ -360,19 +398,35 @@ LAST_VALUE=""
 
 progress_line() {
     local pct="$1" iter="$2" task="$3" name="$4" elapsed="$5" expected="$6"
+    PROGRESS_ACTIVE=1
     printf '\r%s[%3d%%]%s iter %d/%d  task %d/%d  %-25s %3ds/%3ds%s' \
         "$BOLD" "$pct" "$RESET" "$iter" "$ITERATIONS" "$task" "$TASKS_PER_ITER" "$name" "$elapsed" "$expected" "$CLR"
 }
 
-progress_log() {
-    local pct="$1" iter="$2" task="$3" name="$4" elapsed="$5" expected="$6"
-    printf '[%3d%%] iter %d/%d  task %d/%d  %-25s %3ds/%3ds\n' \
-        "$pct" "$iter" "$ITERATIONS" "$task" "$TASKS_PER_ITER" "$name" "$elapsed" "$expected"
+progress_finish() {
+    if (( PROGRESS_ACTIVE == 1 )); then
+        printf '\r%s[100%%]%s benchmark complete%s\n' "$BOLD" "$RESET" "$CLR"
+        PROGRESS_ACTIVE=0
+    else
+        say "[100%] benchmark complete"
+    fi
+}
+
+progress_cooldown() {
+    local iter="$1" sec="$2" left pct
+    [[ -t 1 ]] || return 0
+    pct=$(( DONE_WORK * 100 / TOTAL_WORK ))
+    for ((left=sec; left>0; left--)); do
+        printf '\r%s[%3d%%]%s iter %d/%d  cooldown                  %3ds    %s' \
+            "$BOLD" "$pct" "$RESET" "$iter" "$ITERATIONS" "$left" "$CLR"
+        PROGRESS_ACTIVE=1
+        sleep 1 200>&-
+    done
 }
 
 run_timed_capture() {
     local expected="$1" iter="$2" task="$3" name="$4" outfile="$5"; shift 5
-    local pid start now elapsed shown pct rc next_log
+    local pid start now elapsed shown pct rc
     : >"$outfile"
     "$@" 200>&- </dev/null >"$outfile" 2>&1 &
     pid=$!
@@ -380,23 +434,19 @@ run_timed_capture() {
     record_pid_state "$TMP_BASE/.active-pid" "$pid"
     start=$(date +%s)
     shown=-1
-    next_log=0
 
+    # Interactive terminals get exactly one continuously updated progress line.
+    # Non-TTY output is intentionally quiet to avoid log spam; failures still
+    # print their normal error message and the final result is always emitted.
     while kill -0 "$pid" 2>/dev/null; do
         now=$(date +%s)
         elapsed=$(( now - start ))
         (( elapsed > expected )) && elapsed=$expected
         pct=$(( (DONE_WORK + elapsed) * 100 / TOTAL_WORK ))
         (( pct > 99 )) && pct=99
-
-        if [[ -t 1 ]]; then
-            if (( elapsed != shown )); then
-                progress_line "$pct" "$iter" "$task" "$name" "$elapsed" "$expected"
-                shown=$elapsed
-            fi
-        elif (( elapsed >= next_log )); then
-            progress_log "$pct" "$iter" "$task" "$name" "$elapsed" "$expected"
-            next_log=$(( elapsed + 5 ))
+        if [[ -t 1 && $elapsed -ne $shown ]]; then
+            progress_line "$pct" "$iter" "$task" "$name" "$elapsed" "$expected"
+            shown=$elapsed
         fi
         sleep 1 200>&-
     done
@@ -406,13 +456,11 @@ run_timed_capture() {
     rm -f -- "$TMP_BASE/.active-pid" 2>/dev/null || true
     DONE_WORK=$(( DONE_WORK + expected ))
     (( DONE_WORK > TOTAL_WORK )) && DONE_WORK=$TOTAL_WORK
-    pct=$(( DONE_WORK * 100 / TOTAL_WORK ))
+
+    # Do not print a newline here: the next task overwrites the same line.
     if [[ -t 1 ]]; then
+        pct=$(( DONE_WORK * 100 / TOTAL_WORK ))
         progress_line "$pct" "$iter" "$task" "$name" "$expected" "$expected"
-        printf '\n'
-    else
-        printf '[%3d%%] iter %d/%d  task %d/%d  %-25s done\n' \
-            "$pct" "$iter" "$ITERATIONS" "$task" "$TASKS_PER_ITER" "$name"
     fi
     return "$rc"
 }
@@ -535,6 +583,16 @@ run_crypto_evp() {
     LAST_VALUE="$value"
 }
 
+run_cpu() {
+    local iter="$1" task="$2" out="$3" value
+    run_timed_capture "$CPU_SEC" "$iter" "$task" "CPU sysbench 1T" "$out" \
+        sysbench cpu --threads=1 --time="$CPU_SEC" --events=0 --cpu-max-prime=20000 run \
+        || die "sysbench CPU завершился ошибкой: $out"
+    value="$(awk '/events per second:/ {print $4}' "$out" | tail -n1)"
+    is_num "$value" || die "Не удалось разобрать sysbench CPU result: $out"
+    LAST_VALUE="$value"
+}
+
 run_memory() {
     local iter="$1" task="$2" out="$3" value
     run_timed_capture "$RAM_SEC" "$iter" "$task" "MEM 64M seq read" "$out" \
@@ -644,6 +702,14 @@ fmt_x25519() {
         }'
 }
 
+fmt_cpu() {
+    awk -v v="$1" 'function trim(s){if(index(s,".")){sub(/0+$/, "", s);sub(/\.$/, "", s)}return s}
+        BEGIN {
+            if (v >= 1000) {x=v/1000; s=(x<10?sprintf("%.2f",x):x<100?sprintf("%.1f",x):sprintf("%.0f",x)); printf "%sk/s",trim(s)}
+            else printf "%.0f/s",v
+        }'
+}
+
 fmt_crypto() {
     awk -v v="$1" 'function trim(s){if(index(s,".")){sub(/0+$/, "", s);sub(/\.$/, "", s)}return s}
         BEGIN {
@@ -674,11 +740,13 @@ latency_anomaly_flag() {
 }
 
 performance_anomaly_flag() {
-    # Per-iteration performance anomaly only. Disk is shown here but never enters VPN scoring.
-    awk -v x="$1" -v a="$2" -v c="$3" -v m="$4" -v d="$5" \
-        -v xm="$6" -v am="$7" -v cm="$8" -v mm="$9" -v dm="${10}" 'BEGIN {
+    # Per-iteration performance anomaly only. Disk is shown here but has only a
+    # small weight in SYSTEM and never enters STABILITY.
+    awk -v x="$1" -v a="$2" -v c="$3" -v cpu="$4" -v m="$5" -v d="$6" \
+        -v xm="$7" -v am="$8" -v cm="$9" -v cpum="${10}" -v mm="${11}" -v dm="${12}" 'BEGIN {
         dt=(dm*2.5 > dm+0.5 ? dm*2.5 : dm+0.5);
-        bad=(d>dt || (xm>0 && x<xm*.8) || (am>0 && a<am*.8) || (cm>0 && c<cm*.8) || (mm>0 && m<mm*.8));
+        bad=(d>dt || (xm>0 && x<xm*.8) || (am>0 && a<am*.8) || (cm>0 && c<cm*.8) ||
+             (cpum>0 && cpu<cpum*.8) || (mm>0 && m<mm*.8));
         if (bad) printf "!";
     }'
 }
@@ -687,6 +755,15 @@ lat_score() {
     # Log interpolation: 100 at/below good, 0 at/above bad.
     awk -v x="$1" -v good="$2" -v bad="$3" 'BEGIN {
         if(x<=good) s=100; else if(x>=bad) s=0; else s=100*(log(bad)-log(x))/(log(bad)-log(good));
+        if(s<0)s=0;if(s>100)s=100; printf "%.2f",s
+    }'
+}
+
+perf_score() {
+    # Provisional fixed throughput scale: 0 at/below bad, 100 at/above good.
+    # Log interpolation keeps a single very fast architecture from dominating.
+    awk -v x="$1" -v bad="$2" -v good="$3" 'BEGIN {
+        if(x<=bad) s=0; else if(x>=good) s=100; else s=100*(log(x)-log(bad))/(log(good)-log(bad));
         if(s<0)s=0;if(s>100)s=100; printf "%.2f",s
     }'
 }
@@ -709,13 +786,151 @@ rate_score() {
 
 color_score() {
     local v="$1"
-    if (( v >= 90 )); then printf '%s%3d%s' "$GREEN$BOLD" "$v" "$RESET"
-    elif (( v >= 75 )); then printf '%s%3d%s' "$YELLOW$BOLD" "$v" "$RESET"
-    else printf '%s%3d%s' "$RED$BOLD" "$v" "$RESET"
+    if (( v >= 90 )); then printf '%s%d%s' "$GREEN$BOLD" "$v" "$RESET"
+    elif (( v >= 75 )); then printf '%s%d%s' "$YELLOW$BOLD" "$v" "$RESET"
+    else printf '%s%d%s' "$RED$BOLD" "$v" "$RESET"
+    fi
+}
+
+
+command_version_line() {
+    local name="$1"; shift
+    local out
+    out="$("$@" 2>&1 | head -n 1 || true)"
+    printf '%-12s %s\n' "$name" "${out:-unknown}"
+}
+
+
+capture_debug_environment() {
+    (( DEBUG_MODE == 1 )) || return 0
+    local d="$TMP_BASE/environment"
+    mkdir -p "$d" 2>/dev/null || return 0
+    cp /etc/os-release "$d/os-release.txt" 2>/dev/null || true
+    cp /proc/cpuinfo "$d/proc-cpuinfo.txt" 2>/dev/null || true
+    cp /proc/meminfo "$d/proc-meminfo.txt" 2>/dev/null || true
+    cp /proc/loadavg "$d/proc-loadavg.txt" 2>/dev/null || true
+    uname -a >"$d/uname.txt" 2>&1 || true
+    lscpu >"$d/lscpu.txt" 2>&1 || true
+    systemd-detect-virt >"$d/virt.txt" 2>&1 || true
+    df -hT >"$d/df.txt" 2>&1 || true
+    findmnt >"$d/findmnt.txt" 2>&1 || true
+    lsblk -a -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS,ROTA,DISC-MAX,MODEL >"$d/lsblk.txt" 2>&1 || true
+    openssl version -a >"$d/openssl-version.txt" 2>&1 || true
+    cyclictest --version >"$d/cyclictest-version.txt" 2>&1 || true
+    stress-ng --version >"$d/stress-ng-version.txt" 2>&1 || true
+    sysbench --version >"$d/sysbench-version.txt" 2>&1 || true
+    fio --version >"$d/fio-version.txt" 2>&1 || true
+}
+
+write_debug_report() {
+    local report="$TMP_BASE/debug-report.txt"
+    {
+        echo "VPSBENCH DEBUG REPORT"
+        echo "version=$SCRIPT_VERSION"
+        echo "completed=$RUN_COMPLETED"
+        echo "timestamp_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "uid=$EUID"
+        echo
+        echo "[CONFIG]"
+        printf 'iterations=%s cyclic_sec=%s crypto_sec=%s cpu_sec=%s mem_sec=%s disk_sec=%s cooldown_sec=%s hist_max_us=%s fio_size_mb=%s fio_engine=%s\n' \
+            "$ITERATIONS" "$CYCLIC_SEC" "$CRYPTO_SEC" "$CPU_SEC" "$RAM_SEC" "$DISK_SEC" "$COOLDOWN_SEC" "$HIST_MAX_US" "$FIO_SIZE_MB" "$fio_engine"
+        printf 'cyclic_cmd='; printf '%q ' "${cyclic_cmd[@]}"; printf '\n'
+        echo
+        echo "[SYSTEM]"
+        printf 'os=%s\n' "${os_name:-unknown}"
+        printf 'kernel=%s\n' "$(uname -a)"
+        printf 'virt=%s\n' "${virt:-unknown}"
+        printf 'cpu=%s\n' "${model:-unknown}"
+        printf 'vcpu=%s mem_mib=%s isa=%s\n' "$(nproc)" "${mem_mb:-unknown}" "$(isa_short)"
+        printf 'loadavg=%s\n' "$(cat /proc/loadavg 2>/dev/null || true)"
+        echo
+        echo "[VERSIONS]"
+        command_version_line cyclictest cyclictest --version
+        command_version_line stress-ng stress-ng --version
+        command_version_line sysbench sysbench --version
+        command_version_line fio fio --version
+        command_version_line openssl openssl version
+        command_version_line jq jq --version
+        echo
+        echo "[ITERATIONS]"
+        echo -e "iter\tidle_p999_us\tload_p999_us\tidle_max_us\tload_max_us\tx25519_ops_s\taes_B_s\tchacha_B_s\tcpu_events_s\tmem_MiB_s\tdisk_p999_ms"
+        cat "$TMP_BASE/iterations.tsv" 2>/dev/null || true
+        echo
+        echo "[CYCLIC_PER_ITERATION]"
+        echo -e "iter\tidle_p999_us\tidle_avg_us\tidle_max_us\tidle_ge1ms\tidle_ge5ms\tidle_ge10ms\tload_p999_us\tload_avg_us\tload_max_us\tload_ge1ms\tload_ge5ms\tload_ge10ms"
+        cat "$TMP_BASE/cyclic-details.tsv" 2>/dev/null || true
+        if (( RUN_COMPLETED == 1 )); then
+            echo
+            echo "[AGGREGATE]"
+            printf 'idle_p9999_us=%s idle_max_us=%s idle_ge1ms=%s idle_ge5ms=%s idle_ge10ms=%s idle_samples=%s\n' \
+                "$idle_p9999" "$idle_max_all" "$idle_gt1_count" "$idle_gt5_count" "$idle_gt10_count" "$idle_samples"
+            printf 'load_p9999_us=%s load_max_us=%s load_ge1ms=%s load_ge5ms=%s load_ge10ms=%s load_samples=%s\n' \
+                "$load_p9999" "$load_max_all" "$load_gt1_count" "$load_gt5_count" "$load_gt10_count" "$load_samples"
+            echo
+            echo "[STATS]"
+            printf 'idle median=%s cv=%s min=%s max=%s mean=%s\n' "$idle_med" "$idle_cv" "$idle_min" "$idle_worst" "$idle_mean"
+            printf 'load median=%s cv=%s min=%s max=%s mean=%s\n' "$load_med" "$load_cv" "$load_min" "$load_worst" "$load_mean"
+            printf 'x25519 median=%s cv=%s min=%s max=%s mean=%s\n' "$x_med" "$x_cv" "$x_min" "$x_max" "$x_mean"
+            printf 'aes median=%s cv=%s min=%s max=%s mean=%s\n' "$aes_med" "$aes_cv" "$aes_min" "$aes_max" "$aes_mean"
+            printf 'chacha median=%s cv=%s min=%s max=%s mean=%s\n' "$cha_med" "$cha_cv" "$cha_min" "$cha_max" "$cha_mean"
+            printf 'cpu median=%s cv=%s min=%s max=%s mean=%s\n' "$cpu_med" "$cpu_cv" "$cpu_min" "$cpu_max" "$cpu_mean"
+            printf 'mem median=%s cv=%s min=%s max=%s mean=%s\n' "$ram_med" "$ram_cv" "$ram_min" "$ram_max" "$ram_mean"
+            printf 'disk median=%s cv=%s min=%s max=%s mean=%s\n' "$disk_med" "$disk_cv" "$disk_min" "$disk_max" "$disk_mean"
+            echo
+            echo "[SCORE_COMPONENTS]"
+            printf 'latency_score=%s crypto_score=%s system_score=%s overall_score=%s stability=%s\n' \
+                "$latency_score" "$crypto_score" "$system_score" "$overall_score" "$stab"
+            printf 'latency_subscores idle=%s load=%s idle_p9999=%s load_p9999=%s worst=%s\n' \
+                "$s_idle" "$s_load" "$s_idle9999" "$s_load9999" "$s_worst"
+            printf 'crypto_subscores x25519=%s aes=%s chacha=%s\n' "$sx" "$sa" "$sc"
+            printf 'system_subscores cpu=%s mem=%s disk=%s\n' "$scpu" "$smem" "$sdisk"
+            printf 'spike_rates_per_million ge5=%s ge10=%s spike_scores ge5=%s ge10=%s\n' \
+                "$gt5_rate" "$gt10_rate" "$spike5_s" "$spike10_s"
+        fi
+        echo
+        echo "[RAW_FILES_IN_ARCHIVE]"
+        find "$TMP_BASE" -maxdepth 1 -type f -printf '%f\n' 2>/dev/null | sort
+    } >"$report"
+}
+
+create_debug_bundle() {
+    local state="${1:-complete}" debug_dir stamp base
+    (( DEBUG_MODE == 1 )) || return 0
+    (( DEBUG_BUNDLE_CREATED == 0 )) || return 0
+    [[ -n "${TMP_BASE:-}" && -d "$TMP_BASE" ]] || return 0
+
+    write_debug_report || true
+    debug_dir="${VPSBENCH_DEBUG_DIR:-/var/tmp}"
+    [[ -d "$debug_dir" && -w "$debug_dir" ]] || debug_dir="${TMPDIR:-/tmp}"
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    base="vpsbench-debug-${SCRIPT_VERSION}-${state}-${stamp}-$$.tar.gz"
+    DEBUG_ARCHIVE="$debug_dir/$base"
+    if tar -C "$TMP_BASE" -czf "$DEBUG_ARCHIVE" . 2>/dev/null; then
+        chmod 0644 "$DEBUG_ARCHIVE" 2>/dev/null || true
+        DEBUG_BUNDLE_CREATED=1
+        return 0
+    fi
+    DEBUG_ARCHIVE=""
+    return 1
+}
+
+print_debug_report() {
+    (( DEBUG_MODE == 1 )) || return 0
+    write_debug_report
+    say ""
+    say "${BOLD}DEBUG${RESET}"
+    cat "$TMP_BASE/debug-report.txt"
+    if create_debug_bundle "complete"; then
+        say ""
+        info "Raw debug bundle: $DEBUG_ARCHIVE"
+        info "Upload this .tar.gz for full analysis; it contains raw logs, fio JSON and cyclictest histograms."
+    else
+        warn "Could not create raw debug bundle"
     fi
 }
 
 main() {
+    parse_args "$@"
     info "VPSBench ${SCRIPT_VERSION}: starting"
     validate_config
     acquire_lock
@@ -726,6 +941,7 @@ main() {
     write_owner_marker
     setup_cyclic_cmd
     choose_fio_engine
+    capture_debug_environment
 
     local os_name virt model mem_mb load1
     # shellcheck disable=SC1091
@@ -745,7 +961,7 @@ main() {
     say "vCPU:    $(nproc)    Mem: ${mem_mb} MiB    ISA: $(isa_short)"
     say "Load1:   $load1"
     say "Plan:    ${ITERATIONS} итераций, ~${PER_ITER_WORK}s измерений/итерация (~$((EST_RUNTIME/60))m$((EST_RUNTIME%60))s + preparation)"
-    say "Tests:   idle latency -> X25519 -> AES-GCM -> ChaCha20 -> MEM -> disk QD1 -> latency @ CPU 50%"
+    say "Tests:   idle latency -> X25519 -> AES-GCM -> ChaCha20 -> CPU 1T -> MEM -> disk QD1 -> latency @ CPU 50%"
     say "Network: внешних соединений во время benchmark-фазы нет"
     say "Safety:  single-run lock, signal cleanup, orphan recovery + legacy cleanup"
     say ""
@@ -754,16 +970,18 @@ main() {
     sleep 2 200>&-
 
     local f
-    for f in idle_p999 idle_max idle_gt1 idle_gt5 idle_gt10 load_p999 load_max load_gt1 load_gt5 load_gt10 x255 aes cha ram disk; do
+    for f in idle_p999 idle_max idle_gt1 idle_gt5 idle_gt10 load_p999 load_max load_gt1 load_gt5 load_gt10 x255 aes cha cpu ram disk; do
         : >"$TMP_BASE/$f.dat"
     done
     : >"$TMP_BASE/iterations.tsv"
+    : >"$TMP_BASE/cyclic-details.tsv"
 
     local i task hist log vals idle_p999 idle_max idle_gt1 idle_gt5 idle_gt10 idle_avg
-    local load_p999 load_max load_gt1 load_gt5 load_gt10 load_avg x255 aes cha ram disk
+    local load_p999 load_max load_gt1 load_gt5 load_gt10 load_avg x255 aes cha cpu ram disk
 
     for ((i=1; i<=ITERATIONS; i++)); do
-        say "${DIM}--- итерация $i/$ITERATIONS ---${RESET}"
+        # Iteration/task state is shown in the single live progress line.
+        :
         task=1
 
         hist="$TMP_BASE/cyclic-idle-$i.hist"; log="$TMP_BASE/cyclic-idle-$i.log"
@@ -776,6 +994,7 @@ main() {
         ((task++)); run_crypto_x25519 "$i" "$task" "$TMP_BASE/x255-$i.log"; x255="$LAST_VALUE"; printf '%s\n' "$x255" >>"$TMP_BASE/x255.dat"
         ((task++)); run_crypto_evp aes-128-gcm "crypto AES-GCM" "$i" "$task" "$TMP_BASE/aes-$i.log"; aes="$LAST_VALUE"; printf '%s\n' "$aes" >>"$TMP_BASE/aes.dat"
         ((task++)); run_crypto_evp chacha20-poly1305 "crypto ChaCha20" "$i" "$task" "$TMP_BASE/cha-$i.log"; cha="$LAST_VALUE"; printf '%s\n' "$cha" >>"$TMP_BASE/cha.dat"
+        ((task++)); run_cpu "$i" "$task" "$TMP_BASE/cpu-$i.log"; cpu="$LAST_VALUE"; printf '%s\n' "$cpu" >>"$TMP_BASE/cpu.dat"
         ((task++)); run_memory "$i" "$task" "$TMP_BASE/ram-$i.log"; ram="$LAST_VALUE"; printf '%s\n' "$ram" >>"$TMP_BASE/ram.dat"
         ((task++)); run_disk "$i" "$task" "$TMP_BASE/fio-$i.json" "$TMP_BASE/fio-$i.log"; disk="$LAST_VALUE"; printf '%s\n' "$disk" >>"$TMP_BASE/disk.dat"
 
@@ -786,26 +1005,35 @@ main() {
         printf '%s\n' "$load_p999" >>"$TMP_BASE/load_p999.dat"; printf '%s\n' "$load_max" >>"$TMP_BASE/load_max.dat"
         printf '%s\n' "$load_gt1" >>"$TMP_BASE/load_gt1.dat"; printf '%s\n' "$load_gt5" >>"$TMP_BASE/load_gt5.dat"; printf '%s\n' "$load_gt10" >>"$TMP_BASE/load_gt10.dat"
 
-        printf '%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$i" "$idle_p999" "$load_p999" "$idle_max" "$load_max" "$x255" "$aes" "$cha" "$ram" "$disk" >>"$TMP_BASE/iterations.tsv"
+        printf '%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$i" "$idle_p999" "$idle_avg" "$idle_max" "$idle_gt1" "$idle_gt5" "$idle_gt10" \
+            "$load_p999" "$load_avg" "$load_max" "$load_gt1" "$load_gt5" "$load_gt10" >>"$TMP_BASE/cyclic-details.tsv"
+
+        printf '%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$i" "$idle_p999" "$load_p999" "$idle_max" "$load_max" "$x255" "$aes" "$cha" "$cpu" "$ram" "$disk" >>"$TMP_BASE/iterations.tsv"
 
         if (( i < ITERATIONS )); then
-            printf '%s cooldown %ds перед следующей итерацией%s\n' "$DIM" "$COOLDOWN_SEC" "$RESET"
-            sleep "$COOLDOWN_SEC" 200>&-
+            if [[ -t 1 ]]; then
+                progress_cooldown "$i" "$COOLDOWN_SEC"
+            else
+                sleep "$COOLDOWN_SEC" 200>&-
+            fi
         fi
     done
 
     DONE_WORK=$TOTAL_WORK
-    [[ -t 1 ]] && printf '\r%s[100%%]%s benchmark complete%s\n\n' "$BOLD" "$RESET" "$CLR" || say "[100%] benchmark complete"
+    progress_finish
+    say ""
 
     local idle_med idle_cv idle_min idle_worst idle_mean load_med load_cv load_min load_worst load_mean
     local x_med x_cv x_min x_max x_mean aes_med aes_cv aes_min aes_max aes_mean
-    local cha_med cha_cv cha_min cha_max cha_mean ram_med ram_cv ram_min ram_max ram_mean
-    local disk_med disk_cv disk_min disk_max disk_mean
+    local cha_med cha_cv cha_min cha_max cha_mean cpu_med cpu_cv cpu_min cpu_max cpu_mean
+    local ram_med ram_cv ram_min ram_max ram_mean disk_med disk_cv disk_min disk_max disk_mean
     read -r idle_med idle_cv idle_min idle_worst idle_mean < <(calc_stats "$TMP_BASE/idle_p999.dat")
     read -r load_med load_cv load_min load_worst load_mean < <(calc_stats "$TMP_BASE/load_p999.dat")
     read -r x_med x_cv x_min x_max x_mean < <(calc_stats "$TMP_BASE/x255.dat")
     read -r aes_med aes_cv aes_min aes_max aes_mean < <(calc_stats "$TMP_BASE/aes.dat")
     read -r cha_med cha_cv cha_min cha_max cha_mean < <(calc_stats "$TMP_BASE/cha.dat")
+    read -r cpu_med cpu_cv cpu_min cpu_max cpu_mean < <(calc_stats "$TMP_BASE/cpu.dat")
     read -r ram_med ram_cv ram_min ram_max ram_mean < <(calc_stats "$TMP_BASE/ram.dat")
     read -r disk_med disk_cv disk_min disk_max disk_mean < <(calc_stats "$TMP_BASE/disk.dat")
 
@@ -823,27 +1051,27 @@ main() {
     awk -F '\t' '{print ($4>$5?$4:$5)}' "$TMP_BASE/iterations.tsv" >"$TMP_BASE/worst.dat"
     read -r worst_med worst_cv worst_min worst_max worst_mean < <(calc_stats "$TMP_BASE/worst.dat")
 
-    # RESP: latency quality. MAX is deliberately only 10%; aggregate p99.99 carries
+    # LATENCY score. MAX is deliberately only 10%; aggregate p99.99 carries
     # much more information about persistent tail behaviour than one worst sample.
-    local s_idle s_load s_idle9999 s_load9999 s_worst resp_f resp
+    local s_idle s_load s_idle9999 s_load9999 s_worst latency_f latency_score
     s_idle="$(lat_score "$idle_med" 100 10000)"
     s_load="$(lat_score "$load_med" 500 20000)"
     s_idle9999="$(lat_score "$idle_p9999" 1000 20000)"
     s_load9999="$(lat_score "$load_p9999" 3000 30000)"
     s_worst="$(lat_score "$worst_all" 5000 100000)"
-    resp_f="$(awk -v a="$s_idle" -v b="$s_load" -v c="$s_idle9999" -v d="$s_load9999" -v e="$s_worst" \
+    latency_f="$(awk -v a="$s_idle" -v b="$s_load" -v c="$s_idle9999" -v d="$s_load9999" -v e="$s_worst" \
         'BEGIN{printf "%.2f",a*.20+b*.35+c*.10+d*.25+e*.10}')"
-    resp="$(awk -v v="$resp_f" 'BEGIN{printf "%d",v+0.5}')"
+    latency_score="$(awk -v v="$latency_f" 'BEGIN{printf "%d",v+0.5}')"
 
     # STAB: repeatability + tail health. Storage is intentionally excluded because
     # it is not on the critical path for the target VPN workload.
-    local cv_idle_s cv_load_s cv_x_s cv_aes_s cv_cha_s cv_mem_s perf_cv_s
+    local cv_idle_s cv_load_s cv_x_s cv_aes_s cv_cha_s cv_cpu_s cv_mem_s perf_cv_s
     local total_samples gt5_total gt10_total gt5_rate gt10_rate spike5_s spike10_s stab_f stab
     cv_idle_s="$(cv_score "$idle_cv")"; cv_load_s="$(cv_score "$load_cv")"
     cv_x_s="$(cv_score "$x_cv")"; cv_aes_s="$(cv_score "$aes_cv")"
-    cv_cha_s="$(cv_score "$cha_cv")"; cv_mem_s="$(cv_score "$ram_cv")"
-    perf_cv_s="$(awk -v x="$cv_x_s" -v a="$cv_aes_s" -v c="$cv_cha_s" -v m="$cv_mem_s" \
-        'BEGIN{printf "%.2f",x*.40+a*.20+c*.20+m*.20}')"
+    cv_cha_s="$(cv_score "$cha_cv")"; cv_cpu_s="$(cv_score "$cpu_cv")"; cv_mem_s="$(cv_score "$ram_cv")"
+    perf_cv_s="$(awk -v x="$cv_x_s" -v a="$cv_aes_s" -v c="$cv_cha_s" -v p="$cv_cpu_s" -v m="$cv_mem_s" \
+        'BEGIN{printf "%.2f",x*.30+a*.15+c*.15+p*.20+m*.20}')"
 
     total_samples=$(( idle_samples + load_samples ))
     gt5_total=$(( idle_gt5_count + load_gt5_count ))
@@ -858,10 +1086,31 @@ main() {
         'BEGIN{printf "%.2f",ci*.15+cl*.20+cp*.15+pi*.10+pl*.15+s5*.10+s10*.10+mw*.05}')"
     stab="$(awk -v v="$stab_f" 'BEGIN{printf "%d",v+0.5}')"
 
+    # Provisional fixed performance scales (v1). These are intentionally kept
+    # independent of the current comparison set so a server's score does not
+    # change just because a faster/slower host is added later. We will calibrate
+    # the thresholds after collecting more real-world VPS results.
+    local sx sa sc crypto_f crypto_score scpu smem sdisk system_f system_score overall_f overall_score
+    sx="$(perf_score "$x_med" 10000 40000)"
+    sa="$(perf_score "$aes_med" 1000000000 12000000000)"
+    sc="$(perf_score "$cha_med" 700000000 4500000000)"
+    crypto_f="$(awk -v x="$sx" -v a="$sa" -v c="$sc" 'BEGIN{printf "%.2f",x*.40+a*.30+c*.30}')"
+    crypto_score="$(awk -v v="$crypto_f" 'BEGIN{printf "%d",v+0.5}')"
+
+    scpu="$(perf_score "$cpu_med" 400 2500)"
+    smem="$(perf_score "$ram_med" 4096 45056)"
+    sdisk="$(lat_score "$(awk -v m="$disk_med" 'BEGIN{printf "%.3f",m*1000}')" 300 20000)"
+    system_f="$(awk -v p="$scpu" -v m="$smem" -v d="$sdisk" 'BEGIN{printf "%.2f",p*.55+m*.35+d*.10}')"
+    system_score="$(awk -v v="$system_f" 'BEGIN{printf "%d",v+0.5}')"
+
+    overall_f="$(awk -v l="$latency_score" -v c="$crypto_score" -v s="$system_score" \
+        'BEGIN{printf "%.2f",l*.50+c*.35+s*.15}')"
+    overall_score="$(awk -v v="$overall_f" 'BEGIN{printf "%d",v+0.5}')"
+
     say "${BOLD}LATENCY${RESET}  ${DIM}(cyclictest p99.9; WORST = worst sample in iteration)${RESET}"
     printf '%-5s %10s %10s %10s %3s\n' "ITER" "IDLE" "LOAD" "WORST" ""
     printf '%s\n' "---------------------------------------------"
-    while IFS=$'\t' read -r ri r_idle r_load r_imax r_lmax r_x r_a r_c r_r r_d; do
+    while IFS=$'\t' read -r ri r_idle r_load r_imax r_lmax r_x r_a r_c r_cpu r_r r_d; do
         local r_worst flag
         r_worst="$(awk -v a="$r_imax" -v b="$r_lmax" 'BEGIN{print (a>b?a:b)}')"
         flag="$(latency_anomaly_flag "$r_idle" "$r_load" "$r_worst" "$idle_med" "$load_med" "$worst_med")"
@@ -870,36 +1119,47 @@ main() {
 
     say ""
     say "${BOLD}PERFORMANCE${RESET}"
-    printf '%-5s %10s %10s %10s %10s %10s %3s\n' "ITER" "X25519" "AES" "CHACHA" "MEM" "DISK" ""
-    printf '%s\n' "--------------------------------------------------------------------"
-    while IFS=$'\t' read -r ri r_idle r_load r_imax r_lmax r_x r_a r_c r_r r_d; do
+    printf '%-5s %10s %10s %10s %10s %10s %10s %3s\n' "ITER" "X25519" "AES" "CHACHA" "CPU" "MEM" "DISK" ""
+    printf '%s\n' "-------------------------------------------------------------------------------"
+    while IFS=$'\t' read -r ri r_idle r_load r_imax r_lmax r_x r_a r_c r_cpu r_r r_d; do
         local flag
-        flag="$(performance_anomaly_flag "$r_x" "$r_a" "$r_c" "$r_r" "$r_d" "$x_med" "$aes_med" "$cha_med" "$ram_med" "$disk_med")"
-        printf '%-5s %10s %10s %10s %10s %10s %3s\n' \
-            "$ri" "$(fmt_x25519 "$r_x")" "$(fmt_crypto "$r_a")" "$(fmt_crypto "$r_c")" "$(fmt_ram "$r_r")" "$(fmt_latency_ms "$r_d")" "$flag"
+        flag="$(performance_anomaly_flag "$r_x" "$r_a" "$r_c" "$r_cpu" "$r_r" "$r_d" "$x_med" "$aes_med" "$cha_med" "$cpu_med" "$ram_med" "$disk_med")"
+        printf '%-5s %10s %10s %10s %10s %10s %10s %3s\n' \
+            "$ri" "$(fmt_x25519 "$r_x")" "$(fmt_crypto "$r_a")" "$(fmt_crypto "$r_c")" "$(fmt_cpu "$r_cpu")" "$(fmt_ram "$r_r")" "$(fmt_latency_ms "$r_d")" "$flag"
     done <"$TMP_BASE/iterations.tsv"
 
     say ""
-    say "${BOLD}RESULT${RESET}  ${DIM}(median p99.9 / performance across $ITERATIONS iterations)${RESET}"
-    printf '  RESP  '; color_score "$resp"; printf '      STAB  '; color_score "$stab"; printf '\n\n'
-    printf '  %-10s idle %-9s  load %-9s  worst %s\n' "Latency" "$(fmt_latency_us "$idle_med")" "$(fmt_latency_us "$load_med")" "$(fmt_latency_us "$worst_all")"
-    printf '  %-10s X25  %-9s  AES  %-9s  CHA   %s\n' "Crypto" "$(fmt_x25519 "$x_med")" "$(fmt_crypto "$aes_med")" "$(fmt_crypto "$cha_med")"
-    printf '  %-10s MEM  %-9s  disk %s\n' "System" "$(fmt_ram "$ram_med")" "$(fmt_latency_ms "$disk_med")"
+    printf '%sLATENCY%s ' "$BOLD" "$RESET"; color_score "$latency_score"; printf '/100\n'
+    printf '  idle     %-9s (CV %s%%)   tail %s\n' "$(fmt_latency_us "$idle_med")" "$(fmt_cv "$idle_cv")" "$(fmt_latency_us "$idle_p9999")"
+    printf '  load     %-9s (CV %s%%)   tail %s\n' "$(fmt_latency_us "$load_med")" "$(fmt_cv "$load_cv")" "$(fmt_latency_us "$load_p9999")"
+    printf '  worst    %s\n' "$(fmt_latency_us "$worst_all")"
+    printf '  spikes   >=5ms  idle %s  load %s\n' "$idle_gt5_count" "$load_gt5_count"
+    printf '           >=10ms idle %s  load %s\n' "$idle_gt10_count" "$load_gt10_count"
 
     say ""
-    say "${BOLD}TAIL${RESET}  ${DIM}(aggregate histogram across all $ITERATIONS iterations)${RESET}"
-    printf '            p99.99    >=1ms    >=5ms   >=10ms      worst\n'
-    printf '  Idle  %10s %8s %8s %8s %10s\n' "$(fmt_latency_us "$idle_p9999")" "$idle_gt1_count" "$idle_gt5_count" "$idle_gt10_count" "$(fmt_latency_us "$idle_max_all")"
-    printf '  Load  %10s %8s %8s %8s %10s\n' "$(fmt_latency_us "$load_p9999")" "$load_gt1_count" "$load_gt5_count" "$load_gt10_count" "$(fmt_latency_us "$load_max_all")"
+    printf '%sCRYPTO%s ' "$BOLD" "$RESET"; color_score "$crypto_score"; printf '/100\n'
+    printf '  X25519   %-9s (CV %s%%)\n' "$(fmt_x25519 "$x_med")" "$(fmt_cv "$x_cv")"
+    printf '  AES      %-9s (CV %s%%)\n' "$(fmt_crypto "$aes_med")" "$(fmt_cv "$aes_cv")"
+    printf '  ChaCha   %-9s (CV %s%%)\n' "$(fmt_crypto "$cha_med")" "$(fmt_cv "$cha_cv")"
 
     say ""
-    say "${BOLD}VARIATION${RESET}  ${DIM}(CV between iterations)${RESET}"
-    printf '  Idle %3s%%   Load %3s%%   X25519 %3s%%   AES %3s%%   ChaCha %3s%%   MEM %3s%%   Disk %3s%%\n' \
-        "$(fmt_cv "$idle_cv")" "$(fmt_cv "$load_cv")" "$(fmt_cv "$x_cv")" "$(fmt_cv "$aes_cv")" "$(fmt_cv "$cha_cv")" "$(fmt_cv "$ram_cv")" "$(fmt_cv "$disk_cv")"
+    printf '%sSYSTEM%s ' "$BOLD" "$RESET"; color_score "$system_score"; printf '/100\n'
+    printf '  CPU      %-9s (CV %s%%)\n' "$(fmt_cpu "$cpu_med")" "$(fmt_cv "$cpu_cv")"
+    printf '  MEM      %-9s (CV %s%%)\n' "$(fmt_ram "$ram_med")" "$(fmt_cv "$ram_cv")"
+    printf '  Disk     %-9s (CV %s%%)\n' "$(fmt_latency_ms "$disk_med")" "$(fmt_cv "$disk_cv")"
 
     say ""
+    say "${BOLD}RESULT${RESET}"
+    printf '  SCORE '; color_score "$overall_score"; printf '/100\n'
+    printf '  STABILITY '; color_score "$stab"; printf '/100\n'
+
+    RUN_COMPLETED=1
+    print_debug_report
+
+    say ""
+    say "${DIM}CV = variation between $ITERATIONS iterations; tail = aggregate p99.99 of cyclictest.${RESET}"
+    say "${DIM}SCORE = 50% LATENCY + 35% CRYPTO + 15% SYSTEM. CRYPTO/SYSTEM scales are provisional v1 and will be calibrated after more VPS runs.${RESET}"
     say "${DIM}! is local to each table: latency deviations do not mark PERFORMANCE and vice versa.${RESET}"
-    say "${DIM}RESP = p99.9 + aggregate p99.99 + small MAX penalty. STAB = repeatability + tail/spike health. Disk is shown but not scored.${RESET}"
 
 }
 

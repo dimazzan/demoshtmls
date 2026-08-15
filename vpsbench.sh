@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # VPS responsiveness benchmark for Debian 13 / Ubuntu
-# Local-only benchmark traffic: CPU/scheduler/crypto/MEM/storage.
+# Local-only benchmark traffic: CPU/scheduler/crypto/MEM/storage plus UDP/QUIC host diagnostics.
 
 set -u
 set -o pipefail
@@ -8,7 +8,7 @@ export LC_ALL=C
 export LANG=C
 umask 077
 
-SCRIPT_VERSION="2.0.0"
+SCRIPT_VERSION="2.3.0"
 ITERATIONS="${VPSBENCH_ITERATIONS:-6}"
 CYCLIC_SEC="${VPSBENCH_CYCLIC_SEC:-45}"
 CRYPTO_SEC="${VPSBENCH_CRYPTO_SEC:-5}"
@@ -22,7 +22,8 @@ MEM_BLOCK_REQUEST_MIB="${VPSBENCH_MEM_MIB:-256}"
 LOAD_SLICE_MS="${VPSBENCH_LOAD_SLICE_MS:-1}"
 LOAD_CPU_METHOD="int64"
 WARMUP_SEC=1
-TASKS_PER_ITER=10
+HYSTERIA2_UDP_RECOMMENDED_BYTES=16777216
+TASKS_PER_ITER=12
 DEBUG_MODE=0
 DEBUG_JSON=""
 DEBUG_JSON_CREATED=0
@@ -60,6 +61,9 @@ CPU_TOTAL_START=0
 CPU_STEAL_START=0
 CG_NR_THROTTLED_START=0
 CG_THROTTLED_USEC_START=0
+UDP_RMEM_MAX=0
+UDP_WMEM_MAX=0
+UDP_BUFFER_STATUS="unknown"
 
 usage() {
     cat <<'EOF'
@@ -162,7 +166,7 @@ cleanup() {
 
 on_signal() {
     local name="$1" code="$2"
-    warn "Получен сигнал $name; останавливаю активный тест и очищаю временные файлы"
+    warn "Received $name; stopping the active test and cleaning temporary files"
     exit "$code"
 }
 
@@ -185,7 +189,7 @@ acquire_lock() {
             if flock -w 5 200; then
                 return 0
             fi
-            die "VPSBench уже запущен на этом сервере (lock занят более 5 секунд)."
+            die "VPSBench is already running on this server (lock held for more than 5 seconds)."
         fi
     fi
 
@@ -196,18 +200,18 @@ acquire_lock() {
     lock_dir="/tmp/.vpsbench-lock-${EUID}"
 
     if [[ ! -d "$lock_dir" ]]; then
-        mkdir -p -- "$lock_dir" 2>/dev/null || die "Не удалось создать lock-каталог: $lock_dir"
+        mkdir -p -- "$lock_dir" 2>/dev/null || die "Could not create lock directory: $lock_dir"
     fi
     chmod 700 "$lock_dir" 2>/dev/null || true
 
     local lock_owner
     lock_owner="$(stat -c '%u' "$lock_dir" 2>/dev/null || printf unknown)"
-    [[ "$lock_owner" == "$EUID" ]] || die "Небезопасный владелец lock-каталога: $lock_dir (uid=$lock_owner)"
+    [[ "$lock_owner" == "$EUID" ]] || die "Unsafe lock-directory owner: $lock_dir (uid=$lock_owner)"
 
     LOCK_FILE="$lock_dir/vpsbench.lock"
-    { exec 200>"$LOCK_FILE"; } 2>/dev/null || die "Не удалось открыть fallback lock-файл: $LOCK_FILE"
+    { exec 200>"$LOCK_FILE"; } 2>/dev/null || die "Could not open fallback lock file: $LOCK_FILE"
     if ! flock -w 5 200; then
-        die "VPSBench уже запущен на этом сервере (lock занят более 5 секунд)."
+        die "VPSBench is already running on this server (lock held for more than 5 seconds)."
     fi
 
     info "Lock fallback: $LOCK_FILE"
@@ -260,7 +264,7 @@ cleanup_stale_artifacts() {
             -mmin "+$age_min" -print0 2>/dev/null)
     done
 
-    (( removed == 0 )) || info "Удалены осиротевшие/старые временные файлы VPSBench: $removed"
+    (( removed == 0 )) || info "Removed orphaned or stale VPSBench temporary files: $removed"
 }
 
 write_owner_marker() {
@@ -286,8 +290,8 @@ declare -A PKG_FOR=(
 validate_config() {
     local name value min max
     while read -r name value min max; do
-        [[ "$value" =~ ^[0-9]+$ ]] || die "$name должен быть целым числом: $value"
-        (( value >= min && value <= max )) || die "$name вне безопасного диапазона $min..$max: $value"
+        [[ "$value" =~ ^[0-9]+$ ]] || die "$name must be an integer: $value"
+        (( value >= min && value <= max )) || die "$name is outside the safe range $min..$max: $value"
     done <<EOF
 VPSBENCH_ITERATIONS $ITERATIONS 1 20
 VPSBENCH_CYCLIC_SEC $CYCLIC_SEC 5 600
@@ -306,7 +310,7 @@ EOF
     # to 64/128/256 MiB keeps results reasonably comparable and avoids OOM risk.
     case "$MEM_BLOCK_REQUEST_MIB" in
         64|128|256) ;;
-        *) die "VPSBENCH_MEM_MIB должен быть 64, 128 или 256: $MEM_BLOCK_REQUEST_MIB" ;;
+        *) die "VPSBENCH_MEM_MIB must be 64, 128, or 256: $MEM_BLOCK_REQUEST_MIB" ;;
     esac
 }
 
@@ -316,25 +320,25 @@ recover_dpkg_if_needed() {
     audit="$(dpkg --audit 2>&1 || true)"
     [[ -n "$audit" ]] || return 0
 
-    warn "Обнаружено незавершённое состояние dpkg после предыдущей установки/обрыва"
-    info "Восстановление: dpkg --configure -a"
+    warn "Detected an unfinished dpkg state from a previous installation or interruption"
+    info "Recovery: dpkg --configure -a"
     if ! DEBIAN_FRONTEND=noninteractive dpkg --configure -a; then
-        warn "dpkg --configure -a не завершился; пробую apt-get -f install"
+        warn "dpkg --configure -a did not finish; trying apt-get -f install"
         DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 \
             -f install -y --no-install-recommends \
-            || die "Не удалось восстановить состояние пакетного менеджера"
+            || die "Could not recover the package-manager state"
         DEBIAN_FRONTEND=noninteractive dpkg --configure -a \
-            || die "dpkg остаётся в незавершённом состоянии"
+            || die "dpkg remains in an unfinished state"
     fi
 }
 
 check_os_and_install() {
-    [[ -r /etc/os-release ]] || die "Не найден /etc/os-release. Поддерживаются Debian/Ubuntu."
+    [[ -r /etc/os-release ]] || die "/etc/os-release was not found. Supported systems: Debian and Ubuntu."
     # shellcheck disable=SC1091
     . /etc/os-release
     case "${ID:-}" in
         debian|ubuntu) ;;
-        *) die "Неподдерживаемая ОС: ${PRETTY_NAME:-${ID:-unknown}}. Нужен Debian/Ubuntu." ;;
+        *) die "Unsupported OS: ${PRETTY_NAME:-${ID:-unknown}}. Debian or Ubuntu is required." ;;
     esac
 
     local missing=() pkgs=() c p found
@@ -349,19 +353,19 @@ check_os_and_install() {
     done
 
     if ((${#missing[@]})); then
-        (( EUID == 0 )) || die "Не хватает: ${missing[*]}. Для автоматической установки запустите скрипт от root."
-        info "Не хватает: ${missing[*]}"
+        (( EUID == 0 )) || die "Missing commands: ${missing[*]}. Run the script as root for automatic installation."
+        info "Missing commands: ${missing[*]}"
         recover_dpkg_if_needed
         info "apt-get update"
-        apt-get -o DPkg::Lock::Timeout=60 update -qq || die "apt-get update завершился ошибкой"
+        apt-get -o DPkg::Lock::Timeout=60 update -qq || die "apt-get update failed"
         info "apt-get install: ${pkgs[*]}"
         DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends "${pkgs[@]}" \
-            || die "apt-get install завершился ошибкой"
+            || die "apt-get install failed"
     else
-        info "Все зависимости уже установлены"
+        info "All dependencies are already installed"
     fi
 
-    for c in "${need_cmds[@]}"; do command -v "$c" >/dev/null 2>&1 || die "Команда $c всё ещё недоступна"; done
+    for c in "${need_cmds[@]}"; do command -v "$c" >/dev/null 2>&1 || die "Command $c is still unavailable"; done
 }
 
 cpu_model() {
@@ -396,19 +400,19 @@ setup_affinity() {
         BENCH_PREFIX=(taskset -c "$BENCH_CPU")
         AFFINITY_ACTIVE=1
         SINGLE_CORE_COMPARABLE=1
-        info "Single-vCPU affinity: CPU $BENCH_CPU (allowed: ${allowed:-unknown})"
+        info "CPU affinity: benchmark pinned to logical CPU $BENCH_CPU; available set: ${allowed:-unknown}"
     elif (( vcpus == 1 )); then
         BENCH_CPU="${first:-0}"
         BENCH_PREFIX=()
         AFFINITY_ACTIVE=0
         SINGLE_CORE_COMPARABLE=1
-        warn "taskset affinity недоступна, но системе виден только 1 vCPU; сравнение остаётся одноядерным"
+        warn "taskset affinity is unavailable, but the system exposes only one vCPU; the run remains single-core comparable"
     else
         BENCH_CPU="n/a"
         BENCH_PREFIX=()
         AFFINITY_ACTIVE=0
         SINGLE_CORE_COMPARABLE=0
-        warn "Не удалось закрепить тесты за одним vCPU: multi-vCPU LATENCY/profile scores будут N/A"
+        warn "Could not pin tests to one vCPU; LATENCY, VPN SCORE, and STABILITY will be N/A on this multi-vCPU system"
     fi
 }
 
@@ -428,9 +432,9 @@ choose_memory_block() {
     MEM_BLOCK_MIB="$block"
 
     if (( MEM_BLOCK_REDUCED == 1 )); then
-        warn "MEM working set уменьшен до ${MEM_BLOCK_MIB} MiB (MemAvailable ${avail} MiB)"
+        warn "MEM working set reduced to ${MEM_BLOCK_MIB} MiB (MemAvailable ${avail} MiB)"
     elif (( avail > 0 && avail < MEM_BLOCK_MIB + 64 )); then
-        warn "Низкий MemAvailable (${avail} MiB) для MEM ${MEM_BLOCK_MIB} MiB; возможен reclaim"
+        warn "Low MemAvailable (${avail} MiB) for a ${MEM_BLOCK_MIB} MiB MEM test; reclaim may affect the result"
     else
         info "MEM working set: ${MEM_BLOCK_MIB} MiB sequential read (MemAvailable ${avail:-0} MiB)"
     fi
@@ -484,13 +488,34 @@ start_host_diagnostics() {
     fi
 }
 
+read_uint_file() {
+    local file="$1" value
+    value="$(cat "$file" 2>/dev/null || true)"
+    [[ "$value" =~ ^[0-9]+$ ]] && printf '%s' "$value" || printf '0'
+}
+
+collect_udp_quic_diagnostics() {
+    UDP_RMEM_MAX="$(read_uint_file /proc/sys/net/core/rmem_max)"
+    UDP_WMEM_MAX="$(read_uint_file /proc/sys/net/core/wmem_max)"
+
+    if (( UDP_RMEM_MAX <= 0 || UDP_WMEM_MAX <= 0 )); then
+        UDP_BUFFER_STATUS="unknown"
+    elif (( UDP_RMEM_MAX >= HYSTERIA2_UDP_RECOMMENDED_BYTES && UDP_WMEM_MAX >= HYSTERIA2_UDP_RECOMMENDED_BYTES )); then
+        UDP_BUFFER_STATUS="ready"
+    else
+        UDP_BUFFER_STATUS="below-recommendation"
+    fi
+}
+
 run_warmup() {
     local mem_total=17592186044416
-    info "Короткий warm-up CPU/crypto/MEM (не входит в измерения)"
+    info "Short CPU/crypto/MEM warm-up"
     "${BENCH_PREFIX[@]}" openssl speed -elapsed -seconds "$WARMUP_SEC" -mr ecdhx25519 >/dev/null 2>&1 || true
     "${BENCH_PREFIX[@]}" openssl speed -elapsed -seconds "$WARMUP_SEC" -bytes 1400 -mr -evp aes-128-gcm -aead >/dev/null 2>&1 || true
+    "${BENCH_PREFIX[@]}" openssl speed -elapsed -seconds "$WARMUP_SEC" -bytes 1400 -mr -evp aes-128-gcm -aead -decrypt >/dev/null 2>&1 || true
     "${BENCH_PREFIX[@]}" openssl speed -elapsed -seconds "$WARMUP_SEC" -bytes 16384 -mr -evp aes-128-gcm -aead >/dev/null 2>&1 || true
     "${BENCH_PREFIX[@]}" openssl speed -elapsed -seconds "$WARMUP_SEC" -bytes 1400 -mr -evp chacha20-poly1305 -aead >/dev/null 2>&1 || true
+    "${BENCH_PREFIX[@]}" openssl speed -elapsed -seconds "$WARMUP_SEC" -bytes 1400 -mr -evp chacha20-poly1305 -aead -decrypt >/dev/null 2>&1 || true
     "${BENCH_PREFIX[@]}" openssl speed -elapsed -seconds "$WARMUP_SEC" -bytes 16384 -mr -evp chacha20-poly1305 -aead >/dev/null 2>&1 || true
     "${BENCH_PREFIX[@]}" sysbench cpu --threads=1 --time="$WARMUP_SEC" --events=0 --cpu-max-prime=20000 run >/dev/null 2>&1 || true
     "${BENCH_PREFIX[@]}" sysbench memory --threads=1 --time="$WARMUP_SEC" --events=0 \
@@ -504,34 +529,35 @@ prepare_fio_file() {
     if command -v findmnt >/dev/null 2>&1; then
         fstype="$(findmnt -n -o FSTYPE --target "$dir" 2>/dev/null || true)"
         if [[ "$fstype" == "tmpfs" || "$fstype" == "ramfs" ]]; then
-            warn "$dir расположен на $fstype; для fio переключаюсь на ${HOME:-/root}"
+            warn "$dir is on $fstype; switching fio to ${HOME:-/root}"
             dir="${HOME:-/root}"
         fi
     fi
-    [[ -d "$dir" && -w "$dir" ]] || die "Нет подходящего каталога для временного fio-файла"
+    [[ -d "$dir" && -w "$dir" ]] || die "No suitable directory is available for the temporary fio file"
 
     avail="$(df -Pm "$dir" | awk 'NR==2 {print $4}')"
     if [[ "$avail" =~ ^[0-9]+$ ]] && (( avail < FIO_SIZE_MB + 128 )); then
         if (( avail >= 192 )); then
             FIO_SIZE_MB=64
-            warn "Мало свободного места; fio-файл уменьшен до 64 MiB"
+            warn "Low free space; fio file reduced to 64 MiB"
         else
-            die "Недостаточно свободного места для безопасного fio-теста в $dir"
+            die "Insufficient free space for a safe fio test in $dir"
         fi
     fi
 
-    FIO_FILE="$(mktemp "$dir/.vpsbench-fio-$$.XXXXXX")" || die "Не удалось создать временный fio-файл в $dir"
-    info "Подготовка fio-файла ${FIO_SIZE_MB} MiB в $dir (не входит в замер)"
+    FIO_FILE="$(mktemp "$dir/.vpsbench-fio-$$.XXXXXX")" || die "Could not create a temporary fio file in $dir"
+    info "Preparing a ${FIO_SIZE_MB} MiB fio file in $dir"
     fio --name=prepare --filename="$FIO_FILE" --size="${FIO_SIZE_MB}M" \
         --rw=write --bs=1M --ioengine=sync --direct=1 --end_fsync=1 \
-        --output=/dev/null >/dev/null 2>&1 || die "Не удалось подготовить fio-файл"
+        --output=/dev/null >/dev/null 2>&1 || die "Could not prepare the fio file"
 }
 
 # Weighted benchmark time, used only for terminal progress.
-# Five crypto tests: X25519, AES/ChaCha at 1400 B and 16 KiB.
-PER_ITER_WORK=$(( CYCLIC_SEC * 2 + CRYPTO_SEC * 5 + CPU_SEC + RAM_SEC + DISK_SEC ))
+# Seven crypto tests: X25519, packet AEAD encrypt/decrypt at 1400 B,
+# and stream-oriented AEAD encryption at 16 KiB.
+PER_ITER_WORK=$(( CYCLIC_SEC * 2 + CRYPTO_SEC * 7 + CPU_SEC + RAM_SEC + DISK_SEC ))
 TOTAL_WORK=$(( PER_ITER_WORK * ITERATIONS ))
-WARMUP_WORK=$(( WARMUP_SEC * 7 + COOLDOWN_SEC ))
+WARMUP_WORK=$(( WARMUP_SEC * 9 + COOLDOWN_SEC ))
 EST_RUNTIME=$(( TOTAL_WORK + COOLDOWN_SEC * (ITERATIONS - 1) + WARMUP_WORK + 2 ))
 DONE_WORK=0
 LAST_VALUE=""
@@ -539,7 +565,7 @@ LAST_VALUE=""
 progress_line() {
     local pct="$1" iter="$2" task="$3" name="$4" elapsed="$5" expected="$6"
     PROGRESS_ACTIVE=1
-    printf '\r%s[%3d%%]%s iter %d/%d  task %d/%d  %-25s %3ds/%3ds%s' \
+    printf '\r%s[%3d%%]%s iter %d/%d  task %d/%d  %-25s %3d s / %3d s%s' \
         "$BOLD" "$pct" "$RESET" "$iter" "$ITERATIONS" "$task" "$TASKS_PER_ITER" "$name" "$elapsed" "$expected" "$CLR"
 }
 
@@ -557,7 +583,7 @@ progress_cooldown() {
     [[ -t 1 ]] || return 0
     pct=$(( DONE_WORK * 100 / TOTAL_WORK ))
     for ((left=sec; left>0; left--)); do
-        printf '\r%s[%3d%%]%s iter %d/%d  cooldown                  %3ds    %s' \
+        printf '\r%s[%3d%%]%s iter %d/%d  cooldown                  %3d s    %s' \
             "$BOLD" "$pct" "$RESET" "$iter" "$ITERATIONS" "$left" "$CLR"
         PROGRESS_ACTIVE=1
         sleep 1 200>&-
@@ -674,11 +700,11 @@ setup_cyclic_cmd() {
         cyclic_cmd+=(--laptop)
         CYCLIC_NATURAL_PM=1
         CYCLIC_PM_MODE="laptop-fallback"
-        warn "cyclictest: используется legacy fallback --laptop вместо --default-system"
+        warn "cyclictest: using legacy --laptop fallback instead of --default-system"
     else
         CYCLIC_NATURAL_PM=0
         CYCLIC_PM_MODE="unsupported"
-        warn "cyclictest не умеет сохранить естественный power-management: LATENCY/profile/STABILITY будут N/A"
+        warn "cyclictest cannot preserve natural power management; LATENCY, VPN SCORE, and STABILITY will be N/A"
     fi
 }
 
@@ -703,7 +729,7 @@ run_cyclic() {
         [[ -n "$STRESS_PID" ]] && terminate_pid "$STRESS_PID"
         STRESS_PID=""
         rm -f -- "$TMP_BASE/.stress-pid" 2>/dev/null || true
-        die "cyclictest завершился ошибкой; подробности: $log"
+        die "cyclictest failed; details: $log"
     fi
 
     if [[ -n "$STRESS_PID" ]]; then
@@ -711,27 +737,33 @@ run_cyclic() {
         STRESS_PID=""
         rm -f -- "$TMP_BASE/.stress-pid" 2>/dev/null || true
     fi
-    [[ -s "$hist" ]] || die "cyclictest не создал histogram: $hist"
+    [[ -s "$hist" ]] || die "cyclictest did not create a histogram: $hist"
 }
 
 run_crypto_x25519() {
     local iter="$1" task="$2" out="$3" value
     run_timed_capture "$CRYPTO_SEC" "$iter" "$task" "crypto X25519" "$out" \
         "${BENCH_PREFIX[@]}" openssl speed -elapsed -seconds "$CRYPTO_SEC" -mr ecdhx25519 \
-        || die "OpenSSL X25519 benchmark завершился ошибкой: $out"
+        || die "OpenSSL X25519 benchmark failed: $out"
     value="$(awk -F: '$1=="+F5" {print $4}' "$out" | tail -n1)"
-    is_num "$value" || die "Не удалось разобрать X25519 result: $out"
+    is_num "$value" || die "Could not parse the X25519 result: $out"
     LAST_VALUE="$value"
 }
 
 run_crypto_evp() {
-    local algo="$1" bytes="$2" label="$3" iter="$4" task="$5" out="$6" value
+    local algo="$1" bytes="$2" direction="$3" label="$4" iter="$5" task="$6" out="$7" value
+    local mode_args=()
+    case "$direction" in
+        encrypt) ;;
+        decrypt) mode_args=(-decrypt) ;;
+        *) die "Internal error: unsupported EVP direction $direction" ;;
+    esac
     run_timed_capture "$CRYPTO_SEC" "$iter" "$task" "$label" "$out" \
         "${BENCH_PREFIX[@]}" openssl speed -elapsed -seconds "$CRYPTO_SEC" \
-        -bytes "$bytes" -mr -evp "$algo" -aead \
-        || die "OpenSSL $algo/$bytes benchmark завершился ошибкой: $out"
+        -bytes "$bytes" -mr -evp "$algo" -aead "${mode_args[@]}" \
+        || die "OpenSSL $algo/$bytes/$direction benchmark failed: $out"
     value="$(awk -F: '$1=="+F" {print $NF}' "$out" | tail -n1)"
-    is_num "$value" || die "Не удалось разобрать $algo/$bytes result: $out"
+    is_num "$value" || die "Could not parse the $algo/$bytes/$direction result: $out"
     LAST_VALUE="$value"
 }
 
@@ -739,9 +771,9 @@ run_cpu() {
     local iter="$1" task="$2" out="$3" value
     run_timed_capture "$CPU_SEC" "$iter" "$task" "CPU sysbench 1T" "$out" \
         "${BENCH_PREFIX[@]}" sysbench cpu --threads=1 --time="$CPU_SEC" --events=0 --cpu-max-prime=20000 run \
-        || die "sysbench CPU завершился ошибкой: $out"
+        || die "sysbench CPU failed: $out"
     value="$(awk '/events per second:/ {print $4}' "$out" | tail -n1)"
-    is_num "$value" || die "Не удалось разобрать sysbench CPU result: $out"
+    is_num "$value" || die "Could not parse the sysbench CPU result: $out"
     LAST_VALUE="$value"
 }
 
@@ -750,9 +782,9 @@ run_memory() {
     run_timed_capture "$RAM_SEC" "$iter" "$task" "MEM ${MEM_BLOCK_MIB}M seq read" "$out" \
         "${BENCH_PREFIX[@]}" sysbench memory --threads=1 --time="$RAM_SEC" --events=0 \
         --memory-block-size="${MEM_BLOCK_MIB}M" --memory-total-size=17592186044416 \
-        --memory-access-mode=seq --memory-oper=read run || die "sysbench memory завершился ошибкой: $out"
+        --memory-access-mode=seq --memory-oper=read run || die "sysbench memory failed: $out"
     value="$(awk -F'[()]' '/MiB transferred/ {split($2,a," "); print a[1]}' "$out" | tail -n1)"
-    is_num "$value" || die "Не удалось разобрать sysbench memory result: $out"
+    is_num "$value" || die "Could not parse the sysbench memory result: $out"
     LAST_VALUE="$value"
 }
 
@@ -784,17 +816,23 @@ run_perf_metric() {
         x255)
             run_crypto_x25519 "$iter" "$task" "$TMP_BASE/x255-$iter.log"
             ;;
-        aes1400)
-            run_crypto_evp aes-128-gcm 1400 "AES-GCM 1.4K" "$iter" "$task" "$TMP_BASE/aes1400-$iter.log"
+        aes1400e)
+            run_crypto_evp aes-128-gcm 1400 encrypt "AES-GCM 1400 B enc" "$iter" "$task" "$TMP_BASE/aes1400e-$iter.log"
+            ;;
+        aes1400d)
+            run_crypto_evp aes-128-gcm 1400 decrypt "AES-GCM 1400 B dec" "$iter" "$task" "$TMP_BASE/aes1400d-$iter.log"
             ;;
         aes16k)
-            run_crypto_evp aes-128-gcm 16384 "AES-GCM 16K" "$iter" "$task" "$TMP_BASE/aes16k-$iter.log"
+            run_crypto_evp aes-128-gcm 16384 encrypt "AES-GCM 16K enc" "$iter" "$task" "$TMP_BASE/aes16k-$iter.log"
             ;;
-        cha1400)
-            run_crypto_evp chacha20-poly1305 1400 "ChaCha20 1.4K" "$iter" "$task" "$TMP_BASE/cha1400-$iter.log"
+        cha1400e)
+            run_crypto_evp chacha20-poly1305 1400 encrypt "ChaCha20 1400 B enc" "$iter" "$task" "$TMP_BASE/cha1400e-$iter.log"
+            ;;
+        cha1400d)
+            run_crypto_evp chacha20-poly1305 1400 decrypt "ChaCha20 1400 B dec" "$iter" "$task" "$TMP_BASE/cha1400d-$iter.log"
             ;;
         cha16k)
-            run_crypto_evp chacha20-poly1305 16384 "ChaCha20 16K" "$iter" "$task" "$TMP_BASE/cha16k-$iter.log"
+            run_crypto_evp chacha20-poly1305 16384 encrypt "ChaCha20 16K enc" "$iter" "$task" "$TMP_BASE/cha16k-$iter.log"
             ;;
         cpu)
             run_cpu "$iter" "$task" "$TMP_BASE/cpu-$iter.log"
@@ -802,7 +840,7 @@ run_perf_metric() {
         ram)
             run_memory "$iter" "$task" "$TMP_BASE/ram-$iter.log"
             ;;
-        *) die "Внутренняя ошибка: неизвестная performance-метрика $metric" ;;
+        *) die "Internal error: unknown performance metric $metric" ;;
     esac
 }
 
@@ -812,7 +850,7 @@ choose_fio_engine() {
     enghelp="$(fio --enghelp 2>/dev/null || true)"
     if ! grep -qw 'io_uring' <<<"$enghelp"; then
         fio_engine="libaio"
-        info "fio io_uring недоступен; используется libaio"
+        info "fio io_uring is unavailable; using libaio"
     fi
 }
 
@@ -824,9 +862,9 @@ run_disk() {
         --direct=1 --time_based=1 --runtime="$DISK_SEC" --randrepeat=1 \
         --lat_percentiles=1 --percentile_list=99:99.9 --group_reporting \
         --output-format=json --output="$out" --eta=never; then
-        die "fio benchmark завершился ошибкой: $log"
+        die "fio benchmark failed: $log"
     fi
-    [[ -s "$out" ]] || die "fio не создал JSON: $out"
+    [[ -s "$out" ]] || die "fio did not create JSON output: $out"
 
     value="$(jq -r '
       def p999($x):
@@ -836,7 +874,7 @@ run_disk() {
         else 0 end;
       [p999(.jobs[0].read), p999(.jobs[0].write)] | max
     ' "$out")"
-    is_num "$value" || die "Не удалось разобрать fio p99.9: $out"
+    is_num "$value" || die "Could not parse fio p99.9: $out"
     LAST_VALUE="$value"
 }
 
@@ -886,32 +924,32 @@ fmt_latency_ms() {
 fmt_x25519() {
     awk -v v="$1" 'function trim(s){if(index(s,".")){sub(/0+$/, "", s);sub(/\.$/, "", s)}return s}
         BEGIN {
-            if (v >= 1000) {x=v/1000; s=(x<10?sprintf("%.2f",x):x<100?sprintf("%.1f",x):sprintf("%.0f",x)); printf "%sk/s",trim(s)}
-            else printf "%.0f/s",v
+            if (v >= 1000) {x=v/1000; s=(x<10?sprintf("%.2f",x):x<100?sprintf("%.1f",x):sprintf("%.0f",x)); printf "%s k ops/s",trim(s)}
+            else printf "%.0f ops/s",v
         }'
 }
 
 fmt_cpu() {
     awk -v v="$1" 'function trim(s){if(index(s,".")){sub(/0+$/, "", s);sub(/\.$/, "", s)}return s}
         BEGIN {
-            if (v >= 1000) {x=v/1000; s=(x<10?sprintf("%.2f",x):x<100?sprintf("%.1f",x):sprintf("%.0f",x)); printf "%sk/s",trim(s)}
-            else printf "%.0f/s",v
+            if (v >= 1000) {x=v/1000; s=(x<10?sprintf("%.2f",x):x<100?sprintf("%.1f",x):sprintf("%.0f",x)); printf "%s k events/s",trim(s)}
+            else printf "%.0f events/s",v
         }'
 }
 
 fmt_crypto() {
     awk -v v="$1" 'function trim(s){if(index(s,".")){sub(/0+$/, "", s);sub(/\.$/, "", s)}return s}
         BEGIN {
-            if (v >= 1000000000) {x=v/1000000000; s=(x<10?sprintf("%.2f",x):x<100?sprintf("%.1f",x):sprintf("%.0f",x)); printf "%sG/s",trim(s)}
-            else {x=v/1000000; s=(x<10?sprintf("%.2f",x):x<100?sprintf("%.1f",x):sprintf("%.0f",x)); printf "%sM/s",trim(s)}
+            if (v >= 1000000000) {x=v/1000000000; s=(x<10?sprintf("%.2f",x):x<100?sprintf("%.1f",x):sprintf("%.0f",x)); printf "%s GB/s",trim(s)}
+            else {x=v/1000000; s=(x<10?sprintf("%.2f",x):x<100?sprintf("%.1f",x):sprintf("%.0f",x)); printf "%s MB/s",trim(s)}
         }'
 }
 
 fmt_ram() {
     awk -v v="$1" 'function trim(s){if(index(s,".")){sub(/0+$/, "", s);sub(/\.$/, "", s)}return s}
         BEGIN {
-            if (v >= 1024) {x=v/1024; s=(x<10?sprintf("%.2f",x):x<100?sprintf("%.1f",x):sprintf("%.0f",x)); printf "%sGi/s",trim(s)}
-            else {s=(v<10?sprintf("%.2f",v):v<100?sprintf("%.1f",v):sprintf("%.0f",v)); printf "%sMi/s",trim(s)}
+            if (v >= 1024) {x=v/1024; s=(x<10?sprintf("%.2f",x):x<100?sprintf("%.1f",x):sprintf("%.0f",x)); printf "%s GiB/s",trim(s)}
+            else {s=(v<10?sprintf("%.2f",v):v<100?sprintf("%.1f",v):sprintf("%.0f",v)); printf "%s MiB/s",trim(s)}
         }'
 }
 
@@ -920,43 +958,25 @@ fmt_duration_us() {
         BEGIN {
             if (u < 1000) printf "%.0fus", u;
             else if (u < 1000000) {s=sprintf("%.1f",u/1000); printf "%sms",trim(s)}
-            else {s=sprintf("%.2f",u/1000000); printf "%ss",trim(s)}
+            else {s=sprintf("%.2f",u/1000000); printf "%s s",trim(s)}
         }'
 }
 
-fmt_cv() { awk -v v="$1" 'BEGIN {printf "%.0f",v}' ; }
+fmt_bytes_binary() {
+    awk -v v="$1" 'function trim(s){if(index(s,".")){sub(/0+$/, "", s);sub(/\.$/, "", s)}return s}
+        BEGIN {
+            if (v <= 0) {printf "N/A"; exit}
+            if (v >= 1073741824) {s=sprintf("%.2f",v/1073741824); printf "%s GiB",trim(s)}
+            else if (v >= 1048576) {s=sprintf("%.2f",v/1048576); printf "%s MiB",trim(s)}
+            else if (v >= 1024) {s=sprintf("%.1f",v/1024); printf "%s KiB",trim(s)}
+            else printf "%.0f B",v
+        }'
+}
+
 fmt_percent() {
     awk -v v="$1" 'function trim(s){if(index(s,".")){sub(/0+$/, "", s);sub(/\.$/, "", s)}return s}
         BEGIN {s=(v<10?sprintf("%.1f",v):sprintf("%.0f",v)); printf "%s%%",trim(s)}'
 }
-latency_anomaly_flag() {
-    # Per-iteration latency anomaly only. Performance metrics must not affect this flag.
-    awk -v i="$1" -v l="$2" -v w="$3" -v im="$4" -v lm="$5" -v wm="$6" 'BEGIN {
-        it=(im*1.8 > im+500 ? im*1.8 : im+500);
-        lt=(lm*1.6 > lm+1000 ? lm*1.6 : lm+1000);
-        wt=(wm*2.0 > wm+5000 ? wm*2.0 : wm+5000);
-        if (i>it || l>lt || w>wt) printf "!";
-    }'
-}
-
-performance_anomaly_flag() {
-    # P = anomaly in a scored performance metric; D = disk-only anomaly.
-    # Disk is diagnostic and must never turn a score/stability metric red.
-    awk \
-        -v x="$1" -v a1="$2" -v a16="$3" -v c1="$4" -v c16="$5" -v cpu="$6" -v m="$7" -v d="$8" \
-        -v xm="$9" -v a1m="${10}" -v a16m="${11}" -v c1m="${12}" -v c16m="${13}" \
-        -v cpum="${14}" -v mm="${15}" -v dm="${16}" 'BEGIN {
-        dt=(dm*2.5 > dm+0.5 ? dm*2.5 : dm+0.5);
-        pbad=((xm>0 && x<xm*.8) || (a1m>0 && a1<a1m*.8) || (a16m>0 && a16<a16m*.8) ||
-              (c1m>0 && c1<c1m*.8) || (c16m>0 && c16<c16m*.8) ||
-              (cpum>0 && cpu<cpum*.8) || (mm>0 && m<mm*.8));
-        dbad=(d>dt);
-        if (pbad && dbad) printf "PD";
-        else if (pbad) printf "P";
-        else if (dbad) printf "D";
-    }'
-}
-
 vpn_higher_score() {
     # Higher is better. Piecewise 2026 mainstream-VPS scale:
     # <=t1 poor/trash (0), t2 questionable (45), t3 normal (75),
@@ -1050,7 +1070,7 @@ create_debug_json() {
     if (( CYCLIC_NATURAL_PM == 1 && SINGLE_CORE_COMPARABLE == 1 )); then latency_ready_json=true; else latency_ready_json=false; fi
 
     jq -n \
-        --arg schema "3" \
+        --arg schema "6" \
         --arg version "$SCRIPT_VERSION" \
         --arg state "$state" \
         --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -1066,6 +1086,7 @@ create_debug_json() {
         --arg load_method "$LOAD_CPU_METHOD" \
         --arg fio_engine "$fio_engine" \
         --arg cgroup_cpu_stat "${CGROUP_CPU_STAT:-}" \
+        --arg udp_buffer_status "${UDP_BUFFER_STATUS:-unknown}" \
         --arg cyclic_version "$(version_line cyclictest --version)" \
         --arg stress_version "$(version_line stress-ng --version)" \
         --arg sysbench_version "$(version_line sysbench --version)" \
@@ -1091,6 +1112,9 @@ create_debug_json() {
         --argjson single_core "$single_core_json" \
         --argjson mem_reduced "$mem_reduced_json" \
         --argjson latency_ready "$latency_ready_json" \
+        --argjson udp_rmem_max "${UDP_RMEM_MAX:-0}" \
+        --argjson udp_wmem_max "${UDP_WMEM_MAX:-0}" \
+        --argjson udp_recommended "$HYSTERIA2_UDP_RECOMMENDED_BYTES" \
         --rawfile it "$it_file" \
         --rawfile cyc "$cyc_file" '
         def rows($s): $s | split("\n") | map(select(length > 0) | split("\t"));
@@ -1121,7 +1145,9 @@ create_debug_json() {
             mem_working_set_actual_mib: $mem_actual_mib,
             mem_working_set_reduced: $mem_reduced,
             load: {cpu_percent:50, workers:1, method:$load_method, slice_ms:$load_slice_ms},
-            crypto_buffer_bytes: [1400,16384]
+            crypto_buffer_bytes: [1400,16384],
+            packet_crypto_directions: ["encrypt","decrypt"],
+            stream_crypto_directions: ["encrypt"]
           },
           compatibility: {
             cyclic_power_mode: $cyclic_pm_mode,
@@ -1132,6 +1158,14 @@ create_debug_json() {
             latency_requirement: "natural power management plus a single-vCPU test domain"
           },
           diagnostics_source: {cgroup_cpu_stat: (if $cgroup_cpu_stat=="" then null else $cgroup_cpu_stat end)},
+          udp_quic_host: {
+            socket_buffer_max_bytes:{receive:$udp_rmem_max,send:$udp_wmem_max},
+            hysteria2_recommended_min_bytes:$udp_recommended,
+            recommendation_met:(if $udp_buffer_status=="unknown" then null else ($udp_buffer_status=="ready") end),
+            status:$udp_buffer_status,
+            scored:false,
+            score_weight:0
+          },
           completed_iterations: $n,
           iterations: [range(0;$n) as $k |
             ($i[$k]) as $r | ($c[$k]) as $d |
@@ -1143,11 +1177,15 @@ create_debug_json() {
               },
               crypto: {
                 x25519_ops_s:($r[5]|tonumber),
-                aes_gcm_1400_B_s:($r[6]|tonumber), aes_gcm_16k_B_s:($r[7]|tonumber),
-                chacha20_poly1305_1400_B_s:($r[8]|tonumber), chacha20_poly1305_16k_B_s:($r[9]|tonumber)
+                aes_gcm_1400_encrypt_B_s:($r[6]|tonumber),
+                aes_gcm_1400_decrypt_B_s:($r[7]|tonumber),
+                aes_gcm_16k_encrypt_B_s:($r[8]|tonumber),
+                chacha20_poly1305_1400_encrypt_B_s:($r[9]|tonumber),
+                chacha20_poly1305_1400_decrypt_B_s:($r[10]|tonumber),
+                chacha20_poly1305_16k_encrypt_B_s:($r[11]|tonumber)
               },
-              system: {cpu_events_s:($r[10]|tonumber), mem_MiB_s:($r[11]|tonumber)},
-              disk_diagnostic: {p99_9_ms:($r[12]|tonumber)}
+              system: {cpu_events_s:($r[12]|tonumber), mem_MiB_s:($r[13]|tonumber)},
+              disk_diagnostic: {p99_9_ms:($r[14]|tonumber)}
             }
           ]
         }' >"$tmp_json" || return 1
@@ -1162,18 +1200,23 @@ create_debug_json() {
             --argjson load_p9999 "$load_p9999" --argjson load_max "$load_max_all" --argjson load_ge1 "$load_gt1_count" --argjson load_ge5 "$load_gt5_count" --argjson load_ge10 "$load_gt10_count" --argjson load_samples "$load_samples" \
             --argjson idle_ge5_rate "$idle_gt5_rate" --argjson load_ge5_rate "$load_gt5_rate" --argjson idle_ge10_rate "$idle_gt10_rate" --argjson load_ge10_rate "$load_gt10_rate" \
             --argjson x_med "$x_med" --argjson x_cv "$x_cv" --argjson x_min "$x_min" --argjson x_max "$x_max" --argjson x_mean "$x_mean" --argjson x_drop "$x_drop" \
-            --argjson a1_med "$aes1400_med" --argjson a1_cv "$aes1400_cv" --argjson a1_min "$aes1400_min" --argjson a1_max "$aes1400_max" --argjson a1_mean "$aes1400_mean" --argjson a1_drop "$aes1400_drop" \
+            --argjson a1e_med "$aes1400e_med" --argjson a1e_cv "$aes1400e_cv" --argjson a1e_min "$aes1400e_min" --argjson a1e_max "$aes1400e_max" --argjson a1e_mean "$aes1400e_mean" --argjson a1e_drop "$aes1400e_drop" \
+            --argjson a1d_med "$aes1400d_med" --argjson a1d_cv "$aes1400d_cv" --argjson a1d_min "$aes1400d_min" --argjson a1d_max "$aes1400d_max" --argjson a1d_mean "$aes1400d_mean" --argjson a1d_drop "$aes1400d_drop" \
             --argjson a16_med "$aes16k_med" --argjson a16_cv "$aes16k_cv" --argjson a16_min "$aes16k_min" --argjson a16_max "$aes16k_max" --argjson a16_mean "$aes16k_mean" --argjson a16_drop "$aes16k_drop" \
-            --argjson c1_med "$cha1400_med" --argjson c1_cv "$cha1400_cv" --argjson c1_min "$cha1400_min" --argjson c1_max "$cha1400_max" --argjson c1_mean "$cha1400_mean" --argjson c1_drop "$cha1400_drop" \
+            --argjson c1e_med "$cha1400e_med" --argjson c1e_cv "$cha1400e_cv" --argjson c1e_min "$cha1400e_min" --argjson c1e_max "$cha1400e_max" --argjson c1e_mean "$cha1400e_mean" --argjson c1e_drop "$cha1400e_drop" \
+            --argjson c1d_med "$cha1400d_med" --argjson c1d_cv "$cha1400d_cv" --argjson c1d_min "$cha1400d_min" --argjson c1d_max "$cha1400d_max" --argjson c1d_mean "$cha1400d_mean" --argjson c1d_drop "$cha1400d_drop" \
             --argjson c16_med "$cha16k_med" --argjson c16_cv "$cha16k_cv" --argjson c16_min "$cha16k_min" --argjson c16_max "$cha16k_max" --argjson c16_mean "$cha16k_mean" --argjson c16_drop "$cha16k_drop" \
             --argjson cpu_med "$cpu_med" --argjson cpu_cv "$cpu_cv" --argjson cpu_min "$cpu_min" --argjson cpu_max "$cpu_max" --argjson cpu_mean "$cpu_mean" --argjson cpu_drop "$cpu_drop" \
             --argjson mem_med "$ram_med" --argjson mem_cv "$ram_cv" --argjson mem_min "$ram_min" --argjson mem_max "$ram_max" --argjson mem_mean "$ram_mean" --argjson mem_drop "$mem_drop" \
             --argjson disk_med "$disk_med" --argjson disk_cv "$disk_cv" --argjson disk_min "$disk_min" --argjson disk_max "$disk_max" --argjson disk_mean "$disk_mean" \
             --argjson latency_score "$latency_score" --argjson crypto_score "$crypto_score" --argjson handshake_score "$handshake_score" --argjson packet_score "$packet_score" --argjson stream_score "$stream_score" \
-            --argjson system_score "$system_score" --argjson xtls_score "$xtls_score" --argjson generic_score "$generic_score" --argjson stability "$stab" \
+            --argjson system_score "$system_score" --argjson vpn_score "$vpn_score" --argjson stability "$stab" \
             --argjson tail_score "$tail_score" --argjson consistency_score "$consistency_score" \
             --argjson s_idle "$s_idle" --argjson s_load "$s_load" --argjson s_idle9999 "$s_idle9999" --argjson s_load9999 "$s_load9999" --argjson s_worst "$s_worst" \
-            --argjson sx "$sx" --argjson sa1400 "$sa1400" --argjson sa16k "$sa16k" --argjson sc1400 "$sc1400" --argjson sc16k "$sc16k" --argjson scpu "$scpu" --argjson smem "$smem" \
+            --argjson sx "$sx" \
+            --argjson sa1400e "$sa1400e" --argjson sa1400d "$sa1400d" --argjson sa16k "$sa16k" \
+            --argjson sc1400e "$sc1400e" --argjson sc1400d "$sc1400d" --argjson sc16k "$sc16k" \
+            --argjson scpu "$scpu" --argjson smem "$smem" \
             --argjson tail_idle_s "$tail_idle_s" --argjson tail_load_s "$tail_load_s" --argjson idle_spike5_s "$idle_spike5_s" --argjson load_spike5_s "$load_spike5_s" \
             --argjson idle_spike10_s "$idle_spike10_s" --argjson load_spike10_s "$load_spike10_s" --argjson tail_worst_s "$tail_worst_s" \
             --argjson idle_drift_s "$idle_drift_s" --argjson load_drift_s "$load_drift_s" --argjson perf_repeat_s "$perf_repeat_s" \
@@ -1190,10 +1233,12 @@ create_debug_json() {
                 },
                 crypto: {
                   x25519:{median:$x_med,cv_percent:$x_cv,min:$x_min,max:$x_max,mean:$x_mean,worst_drop_from_median_percent:$x_drop},
-                  aes_gcm_1400:{median:$a1_med,cv_percent:$a1_cv,min:$a1_min,max:$a1_max,mean:$a1_mean,worst_drop_from_median_percent:$a1_drop},
-                  aes_gcm_16k:{median:$a16_med,cv_percent:$a16_cv,min:$a16_min,max:$a16_max,mean:$a16_mean,worst_drop_from_median_percent:$a16_drop},
-                  chacha20_poly1305_1400:{median:$c1_med,cv_percent:$c1_cv,min:$c1_min,max:$c1_max,mean:$c1_mean,worst_drop_from_median_percent:$c1_drop},
-                  chacha20_poly1305_16k:{median:$c16_med,cv_percent:$c16_cv,min:$c16_min,max:$c16_max,mean:$c16_mean,worst_drop_from_median_percent:$c16_drop}
+                  aes_gcm_1400_encrypt:{median:$a1e_med,cv_percent:$a1e_cv,min:$a1e_min,max:$a1e_max,mean:$a1e_mean,worst_drop_from_median_percent:$a1e_drop},
+                  aes_gcm_1400_decrypt:{median:$a1d_med,cv_percent:$a1d_cv,min:$a1d_min,max:$a1d_max,mean:$a1d_mean,worst_drop_from_median_percent:$a1d_drop},
+                  aes_gcm_16k_encrypt:{median:$a16_med,cv_percent:$a16_cv,min:$a16_min,max:$a16_max,mean:$a16_mean,worst_drop_from_median_percent:$a16_drop},
+                  chacha20_poly1305_1400_encrypt:{median:$c1e_med,cv_percent:$c1e_cv,min:$c1e_min,max:$c1e_max,mean:$c1e_mean,worst_drop_from_median_percent:$c1e_drop},
+                  chacha20_poly1305_1400_decrypt:{median:$c1d_med,cv_percent:$c1d_cv,min:$c1d_min,max:$c1d_max,mean:$c1d_mean,worst_drop_from_median_percent:$c1d_drop},
+                  chacha20_poly1305_16k_encrypt:{median:$c16_med,cv_percent:$c16_cv,min:$c16_min,max:$c16_max,mean:$c16_mean,worst_drop_from_median_percent:$c16_drop}
                 },
                 system: {
                   cpu:{median:$cpu_med,cv_percent:$cpu_cv,min:$cpu_min,max:$cpu_max,mean:$cpu_mean,worst_drop_from_median_percent:$cpu_drop},
@@ -1208,13 +1253,17 @@ create_debug_json() {
                 packet_crypto:$packet_score,
                 stream_crypto:$stream_score,
                 system:$system_score,
-                profiles:{xtls_vision:$xtls_score,generic_vpn:$generic_score},
+                vpn_score:$vpn_score,
                 stability:$stability,
                 tail_quality:$tail_score,
                 consistency:$consistency_score,
                 current_subscores: {
                   latency:{idle_p99_9:$s_idle,load_p99_9:$s_load,idle_p99_99:$s_idle9999,load_p99_99:$s_load9999,worst:$s_worst},
-                  crypto:{x25519:$sx,aes_gcm_1400:$sa1400,aes_gcm_16k:$sa16k,chacha20_poly1305_1400:$sc1400,chacha20_poly1305_16k:$sc16k},
+                  crypto:{
+                    x25519:$sx,
+                    aes_gcm_1400_encrypt:$sa1400e,aes_gcm_1400_decrypt:$sa1400d,aes_gcm_16k_encrypt:$sa16k,
+                    chacha20_poly1305_1400_encrypt:$sc1400e,chacha20_poly1305_1400_decrypt:$sc1400d,chacha20_poly1305_16k_encrypt:$sc16k
+                  },
                   system:{cpu:$scpu,mem:$smem},
                   tail_quality:{idle_p99_99:$tail_idle_s,load_p99_99:$tail_load_s,idle_ge_5ms:$idle_spike5_s,load_ge_5ms:$load_spike5_s,idle_ge_10ms:$idle_spike10_s,load_ge_10ms:$load_spike10_s,worst:$tail_worst_s},
                   consistency:{idle_drift:$idle_drift_s,load_drift:$load_drift_s,performance_repeatability:$perf_repeat_s},
@@ -1227,12 +1276,12 @@ create_debug_json() {
                 cgroup:{nr_throttled_delta:$cg_nr_throttled,throttled_usec_delta:$cg_throttled_usec}
               },
               scoring_model: {
-                model_version:"2026-mainstream-v2",
+                model_version:"2026-universal-v5",
                 score_anchors:[0,45,75,90,100],
                 semantics:{zero:"poor/trash relative to the target VPS class",hundred:"realistic near-term rental ceiling, not a physical maximum"},
-                profiles:{
-                  xtls_vision:{latency:0.50,cpu:0.25,x25519_proxy:0.10,stream_crypto_16k:0.10,mem:0.05},
-                  generic_vpn:{latency:0.40,cpu:0.20,x25519_proxy:0.10,packet_crypto_1400:0.20,stream_crypto_16k:0.05,mem:0.05}
+                vpn_score:{
+                  weights:{latency:0.40,cpu:0.30,packet_crypto_1400_bidirectional:0.15,x25519_proxy:0.05,stream_crypto_16k:0.05,mem:0.05},
+                  scope:"universal local VPN host potential; not protocol throughput or route quality"
                 },
                 latency:{
                   weights:{idle_p99_9:0.15,load_p99_9:0.40,idle_p99_99:0.10,load_p99_99:0.30,worst:0.05},
@@ -1244,13 +1293,19 @@ create_debug_json() {
                 },
                 performance_higher_is_better_anchors:{
                   cpu_events_s:[300,500,900,1600,2500],x25519_ops_s:[12000,18000,26000,36000,45000],
-                  aes_gcm_1400_B_s:[600000000,1200000000,2200000000,3800000000,5500000000],
+                  aes_gcm_1400_encrypt_B_s:[600000000,1200000000,2200000000,3800000000,5500000000],
+                  aes_gcm_1400_decrypt_B_s:[600000000,1200000000,2200000000,3800000000,5500000000],
                   aes_gcm_16k_B_s:[1500000000,2500000000,4500000000,8500000000,12000000000],
-                  chacha20_poly1305_1400_B_s:[450000000,800000000,1300000000,1900000000,2600000000],
+                  chacha20_poly1305_1400_encrypt_B_s:[450000000,800000000,1300000000,1900000000,2600000000],
+                  chacha20_poly1305_1400_decrypt_B_s:[450000000,800000000,1300000000,1900000000,2600000000],
                   chacha20_poly1305_16k_B_s:[900000000,1400000000,2000000000,3200000000,4500000000],
                   mem_MiB_s:[4096,8192,16384,28672,45056]
                 },
-                crypto_diagnostic:{weights:{x25519:0.20,packet_crypto:0.50,stream_crypto:0.30},packet:{aes:0.50,chacha:0.50},stream:{aes:0.50,chacha:0.50}},
+                crypto_diagnostic:{
+                  weights:{x25519:0.20,packet_crypto:0.50,stream_crypto:0.30},
+                  packet:{aes:0.50,chacha:0.50,directions:{encrypt:0.50,decrypt:0.50}},
+                  stream:{aes:0.50,chacha:0.50,directions:{encrypt:1.00}}
+                },
                 system:{weights:{cpu:0.80,mem:0.20,disk:0.00}},
                 tail_quality:{
                   weights:{idle_p99_99:0.15,load_p99_99:0.35,idle_ge_5ms:0.05,load_ge_5ms:0.15,idle_ge_10ms:0.05,load_ge_10ms:0.20,worst:0.05},
@@ -1261,10 +1316,10 @@ create_debug_json() {
                 },
                 consistency:{
                   weights:{idle_drift:0.35,load_drift:0.45,performance_repeatability:0.20},
-                  performance_metric_weights:{x25519:0.15,aes_1400:0.10,aes_16k:0.10,chacha_1400:0.10,chacha_16k:0.10,cpu:0.35,mem:0.10},
+                  performance_metric_weights:{x25519:0.15,aes_1400_encrypt:0.05,aes_1400_decrypt:0.05,aes_16k_encrypt:0.10,chacha_1400_encrypt:0.05,chacha_1400_decrypt:0.05,chacha_16k_encrypt:0.10,cpu:0.35,mem:0.10},
                   worst_metric_share:0.20
                 },
-                stability:{formula:"TAIL * (0.65 + 0.35 * CONSISTENCY / 100)",scope:"short benchmark window only"},
+                stability:{formula:"TAIL * (0.65 + 0.0035 * CONSISTENCY)",scope:"short benchmark window only"},
                 disk:{diagnostic_only:true,score_weight:0.00}
               }
             }' "$tmp_json" >"$tmp_full" || return 1
@@ -1290,6 +1345,7 @@ print_debug_result() {
 
 main() {
     parse_args "$@"
+    printf "\n\n"
     info "VPSBench ${SCRIPT_VERSION}: starting"
     validate_config
     acquire_lock
@@ -1302,6 +1358,7 @@ main() {
     setup_cyclic_cmd
     choose_fio_engine
     choose_memory_block
+    collect_udp_quic_diagnostics
 
     local os_name virt model mem_mb load1
     # shellcheck disable=SC1091
@@ -1321,19 +1378,20 @@ main() {
     say "vCPU:    $(nproc)    Bench CPU: $BENCH_CPU    Mem: ${mem_mb} MiB    ISA: $(isa_short)"
     say "Load1:   $load1"
     [[ "$virt" == "wsl" ]] && say "Scope:   WSL2 is a local single-vCPU reference, not a provider/VPS result"
-    say "Plan:    ${ITERATIONS} итераций, ~${PER_ITER_WORK}s измерений/итерация (~$((EST_RUNTIME/60))m$((EST_RUNTIME%60))s + preparation)"
+    say "Plan:    ${ITERATIONS} iterations, ~${PER_ITER_WORK} s measured per iteration (~$((EST_RUNTIME/60)) min $((EST_RUNTIME%60)) s plus preparation)"
     say "Latency: cyclictest on one vCPU; load = stress-ng ${LOAD_CPU_METHOD}, 50%, ${LOAD_SLICE_MS}ms slice, same vCPU"
-    say "Crypto:  X25519 + AES/ChaCha at 1400 B and 16 KiB (CPU proxies)"
+    say "Crypto:  X25519 + AES/ChaCha at 1400 B (enc/dec) and 16 KiB (enc)"
+    say "Score:   universal VPN host model"
     say "MEM:     ${MEM_BLOCK_MIB} MiB sequential read working set"
     say "Order:   idle/load alternates; performance uses paired mirrored rotation; disk last"
-    say "Network: внешних соединений во время benchmark-фазы нет"
+    say "Network: no external connections during the benchmark phase"
     say "Safety:  single-run lock, signal cleanup, orphan recovery + legacy cleanup"
     say ""
 
     prepare_fio_file
     run_warmup
     if (( COOLDOWN_SEC > 0 )); then
-        info "Cooldown after warm-up: ${COOLDOWN_SEC}s"
+        info "Cooldown after warm-up: ${COOLDOWN_SEC} s"
         sleep "$COOLDOWN_SEC" 200>&-
     fi
     start_host_diagnostics
@@ -1341,22 +1399,22 @@ main() {
     local f
     for f in idle_p999 idle_max idle_gt1 idle_gt5 idle_gt10 \
              load_p999 load_max load_gt1 load_gt5 load_gt10 \
-             x255 aes1400 aes16k cha1400 cha16k cpu ram disk; do
+             x255 aes1400e aes1400d aes16k cha1400e cha1400d cha16k cpu ram disk; do
         : >"$TMP_BASE/$f.dat"
     done
     : >"$TMP_BASE/iterations.tsv"
     : >"$TMP_BASE/cyclic-details.tsv"
 
-    local perf_metrics=(x255 aes1400 aes16k cha1400 cha16k cpu ram)
+    local perf_metrics=(x255 aes1400e aes1400d aes16k cha1400e cha1400d cha16k cpu ram)
     local i task first_mode second_mode offset j idx metric nmetrics
     nmetrics=${#perf_metrics[@]}
     local idle_p999 idle_max idle_gt1 idle_gt5 idle_gt10 idle_avg
     local load_p999 load_max load_gt1 load_gt5 load_gt10 load_avg
-    local x255 aes1400 aes16k cha1400 cha16k cpu ram disk
+    local x255 aes1400e aes1400d aes16k cha1400e cha1400d cha16k cpu ram disk
 
     for ((i=1; i<=ITERATIONS; i++)); do
         task=1
-        x255=""; aes1400=""; aes16k=""; cha1400=""; cha16k=""; cpu=""; ram=""; disk=""
+        x255=""; aes1400e=""; aes1400d=""; aes16k=""; cha1400e=""; cha1400d=""; cha16k=""; cpu=""; ram=""; disk=""
 
         if (( i % 2 == 1 )); then
             first_mode="idle"; second_mode="load"
@@ -1374,7 +1432,7 @@ main() {
         fi
 
         # Each odd/even pair uses a rotated order and its exact mirror. Every
-        # metric therefore has mean position 4.0 within a complete pair, avoiding
+        # metric therefore has mean position 5.0 within a complete pair, avoiding
         # systematic hot/cold or boost bias while keeping runs reproducible.
         offset=$(( ((i - 1) / 2) % nmetrics ))
         for ((j=0; j<nmetrics; j++)); do
@@ -1388,9 +1446,11 @@ main() {
             run_perf_metric "$metric" "$i" "$task"
             case "$metric" in
                 x255) x255="$LAST_VALUE"; printf '%s\n' "$x255" >>"$TMP_BASE/x255.dat" ;;
-                aes1400) aes1400="$LAST_VALUE"; printf '%s\n' "$aes1400" >>"$TMP_BASE/aes1400.dat" ;;
+                aes1400e) aes1400e="$LAST_VALUE"; printf '%s\n' "$aes1400e" >>"$TMP_BASE/aes1400e.dat" ;;
+                aes1400d) aes1400d="$LAST_VALUE"; printf '%s\n' "$aes1400d" >>"$TMP_BASE/aes1400d.dat" ;;
                 aes16k) aes16k="$LAST_VALUE"; printf '%s\n' "$aes16k" >>"$TMP_BASE/aes16k.dat" ;;
-                cha1400) cha1400="$LAST_VALUE"; printf '%s\n' "$cha1400" >>"$TMP_BASE/cha1400.dat" ;;
+                cha1400e) cha1400e="$LAST_VALUE"; printf '%s\n' "$cha1400e" >>"$TMP_BASE/cha1400e.dat" ;;
+                cha1400d) cha1400d="$LAST_VALUE"; printf '%s\n' "$cha1400d" >>"$TMP_BASE/cha1400d.dat" ;;
                 cha16k) cha16k="$LAST_VALUE"; printf '%s\n' "$cha16k" >>"$TMP_BASE/cha16k.dat" ;;
                 cpu) cpu="$LAST_VALUE"; printf '%s\n' "$cpu" >>"$TMP_BASE/cpu.dat" ;;
                 ram) ram="$LAST_VALUE"; printf '%s\n' "$ram" >>"$TMP_BASE/ram.dat" ;;
@@ -1416,9 +1476,9 @@ main() {
             "$i" "$idle_p999" "$idle_avg" "$idle_max" "$idle_gt1" "$idle_gt5" "$idle_gt10" \
             "$load_p999" "$load_avg" "$load_max" "$load_gt1" "$load_gt5" "$load_gt10" >>"$TMP_BASE/cyclic-details.tsv"
 
-        printf '%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        printf '%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
             "$i" "$idle_p999" "$load_p999" "$idle_max" "$load_max" \
-            "$x255" "$aes1400" "$aes16k" "$cha1400" "$cha16k" "$cpu" "$ram" "$disk" \
+            "$x255" "$aes1400e" "$aes1400d" "$aes16k" "$cha1400e" "$cha1400d" "$cha16k" "$cpu" "$ram" "$disk" \
             >>"$TMP_BASE/iterations.tsv"
 
         if (( i < ITERATIONS )); then
@@ -1436,18 +1496,22 @@ main() {
 
     local idle_med idle_cv idle_min idle_worst idle_mean load_med load_cv load_min load_worst load_mean
     local x_med x_cv x_min x_max x_mean
-    local aes1400_med aes1400_cv aes1400_min aes1400_max aes1400_mean
+    local aes1400e_med aes1400e_cv aes1400e_min aes1400e_max aes1400e_mean
+    local aes1400d_med aes1400d_cv aes1400d_min aes1400d_max aes1400d_mean
     local aes16k_med aes16k_cv aes16k_min aes16k_max aes16k_mean
-    local cha1400_med cha1400_cv cha1400_min cha1400_max cha1400_mean
+    local cha1400e_med cha1400e_cv cha1400e_min cha1400e_max cha1400e_mean
+    local cha1400d_med cha1400d_cv cha1400d_min cha1400d_max cha1400d_mean
     local cha16k_med cha16k_cv cha16k_min cha16k_max cha16k_mean
     local cpu_med cpu_cv cpu_min cpu_max cpu_mean ram_med ram_cv ram_min ram_max ram_mean
     local disk_med disk_cv disk_min disk_max disk_mean
     read -r idle_med idle_cv idle_min idle_worst idle_mean < <(calc_stats "$TMP_BASE/idle_p999.dat")
     read -r load_med load_cv load_min load_worst load_mean < <(calc_stats "$TMP_BASE/load_p999.dat")
     read -r x_med x_cv x_min x_max x_mean < <(calc_stats "$TMP_BASE/x255.dat")
-    read -r aes1400_med aes1400_cv aes1400_min aes1400_max aes1400_mean < <(calc_stats "$TMP_BASE/aes1400.dat")
+    read -r aes1400e_med aes1400e_cv aes1400e_min aes1400e_max aes1400e_mean < <(calc_stats "$TMP_BASE/aes1400e.dat")
+    read -r aes1400d_med aes1400d_cv aes1400d_min aes1400d_max aes1400d_mean < <(calc_stats "$TMP_BASE/aes1400d.dat")
     read -r aes16k_med aes16k_cv aes16k_min aes16k_max aes16k_mean < <(calc_stats "$TMP_BASE/aes16k.dat")
-    read -r cha1400_med cha1400_cv cha1400_min cha1400_max cha1400_mean < <(calc_stats "$TMP_BASE/cha1400.dat")
+    read -r cha1400e_med cha1400e_cv cha1400e_min cha1400e_max cha1400e_mean < <(calc_stats "$TMP_BASE/cha1400e.dat")
+    read -r cha1400d_med cha1400d_cv cha1400d_min cha1400d_max cha1400d_mean < <(calc_stats "$TMP_BASE/cha1400d.dat")
     read -r cha16k_med cha16k_cv cha16k_min cha16k_max cha16k_mean < <(calc_stats "$TMP_BASE/cha16k.dat")
     read -r cpu_med cpu_cv cpu_min cpu_max cpu_mean < <(calc_stats "$TMP_BASE/cpu.dat")
     read -r ram_med ram_cv ram_min ram_max ram_mean < <(calc_stats "$TMP_BASE/ram.dat")
@@ -1462,10 +1526,8 @@ main() {
     read -r load_p9999 load_max_all load_gt1_count load_gt5_count load_gt10_count load_samples \
         < <(aggregate_cyclic_hists "$TMP_BASE"/cyclic-load-*.hist)
 
-    local worst_all worst_med worst_cv worst_min worst_max worst_mean
+    local worst_all
     worst_all="$(awk -v a="$idle_max_all" -v b="$load_max_all" 'BEGIN{print (a>b?a:b)}')"
-    awk -F '\t' '{print ($4>$5?$4:$5)}' "$TMP_BASE/iterations.tsv" >"$TMP_BASE/worst.dat"
-    read -r worst_med worst_cv worst_min worst_max worst_mean < <(calc_stats "$TMP_BASE/worst.dat")
 
     local latency_comparable latency_compat_reason
     latency_comparable=0
@@ -1521,8 +1583,8 @@ main() {
     fi
 
     local idle_drift_us load_drift_us idle_drift_s load_drift_s
-    local x_drop aes1400_drop aes16k_drop cha1400_drop cha16k_drop cpu_drop mem_drop
-    local x_drop_s aes1400_drop_s aes16k_drop_s cha1400_drop_s cha16k_drop_s cpu_drop_s mem_drop_s
+    local x_drop aes1400e_drop aes1400d_drop aes16k_drop cha1400e_drop cha1400d_drop cha16k_drop cpu_drop mem_drop
+    local x_drop_s aes1400e_drop_s aes1400d_drop_s aes16k_drop_s cha1400e_drop_s cha1400d_drop_s cha16k_drop_s cpu_drop_s mem_drop_s
     local perf_base_s perf_worst_s perf_repeat_s worst_perf_drop worst_perf_name
     local consistency_f consistency_score stab_f stab
     idle_drift_us="$(drift_from_median "$idle_med" "$idle_min" "$idle_worst")"
@@ -1531,28 +1593,32 @@ main() {
     load_drift_s="$(vpn_lower_score "$load_drift_us" 250 500 1000 2000 4000)"
 
     x_drop="$(drop_from_median "$x_med" "$x_min")"
-    aes1400_drop="$(drop_from_median "$aes1400_med" "$aes1400_min")"
+    aes1400e_drop="$(drop_from_median "$aes1400e_med" "$aes1400e_min")"
+    aes1400d_drop="$(drop_from_median "$aes1400d_med" "$aes1400d_min")"
     aes16k_drop="$(drop_from_median "$aes16k_med" "$aes16k_min")"
-    cha1400_drop="$(drop_from_median "$cha1400_med" "$cha1400_min")"
+    cha1400e_drop="$(drop_from_median "$cha1400e_med" "$cha1400e_min")"
+    cha1400d_drop="$(drop_from_median "$cha1400d_med" "$cha1400d_min")"
     cha16k_drop="$(drop_from_median "$cha16k_med" "$cha16k_min")"
     cpu_drop="$(drop_from_median "$cpu_med" "$cpu_min")"
     mem_drop="$(drop_from_median "$ram_med" "$ram_min")"
     x_drop_s="$(vpn_lower_score "$x_drop" 3 7 12 20 35)"
-    aes1400_drop_s="$(vpn_lower_score "$aes1400_drop" 3 7 12 20 35)"
+    aes1400e_drop_s="$(vpn_lower_score "$aes1400e_drop" 3 7 12 20 35)"
+    aes1400d_drop_s="$(vpn_lower_score "$aes1400d_drop" 3 7 12 20 35)"
     aes16k_drop_s="$(vpn_lower_score "$aes16k_drop" 3 7 12 20 35)"
-    cha1400_drop_s="$(vpn_lower_score "$cha1400_drop" 3 7 12 20 35)"
+    cha1400e_drop_s="$(vpn_lower_score "$cha1400e_drop" 3 7 12 20 35)"
+    cha1400d_drop_s="$(vpn_lower_score "$cha1400d_drop" 3 7 12 20 35)"
     cha16k_drop_s="$(vpn_lower_score "$cha16k_drop" 3 7 12 20 35)"
     cpu_drop_s="$(vpn_lower_score "$cpu_drop" 3 7 12 20 35)"
     mem_drop_s="$(vpn_lower_score "$mem_drop" 3 7 12 20 35)"
-    perf_base_s="$(awk -v x="$x_drop_s" -v a1="$aes1400_drop_s" -v a16="$aes16k_drop_s" \
-        -v c1="$cha1400_drop_s" -v c16="$cha16k_drop_s" -v p="$cpu_drop_s" -v m="$mem_drop_s" \
-        'BEGIN{printf "%.2f",x*.15+a1*.10+a16*.10+c1*.10+c16*.10+p*.35+m*.10}')"
+    perf_base_s="$(awk -v x="$x_drop_s" -v a1e="$aes1400e_drop_s" -v a1d="$aes1400d_drop_s" -v a16="$aes16k_drop_s" \
+        -v c1e="$cha1400e_drop_s" -v c1d="$cha1400d_drop_s" -v c16="$cha16k_drop_s" -v p="$cpu_drop_s" -v m="$mem_drop_s" \
+        'BEGIN{printf "%.2f",x*.15+a1e*.05+a1d*.05+a16*.10+c1e*.05+c1d*.05+c16*.10+p*.35+m*.10}')"
     read -r worst_perf_drop worst_perf_name < <(awk \
-        -v x="$x_drop" -v a1="$aes1400_drop" -v a16="$aes16k_drop" \
-        -v c1="$cha1400_drop" -v c16="$cha16k_drop" -v p="$cpu_drop" -v m="$mem_drop" 'BEGIN {
+        -v x="$x_drop" -v a1e="$aes1400e_drop" -v a1d="$aes1400d_drop" -v a16="$aes16k_drop" \
+        -v c1e="$cha1400e_drop" -v c1d="$cha1400d_drop" -v c16="$cha16k_drop" -v p="$cpu_drop" -v m="$mem_drop" 'BEGIN {
         v=x; n="X25519";
-        if(a1>v){v=a1;n="AES-1.4K"} if(a16>v){v=a16;n="AES-16K"}
-        if(c1>v){v=c1;n="ChaCha-1.4K"} if(c16>v){v=c16;n="ChaCha-16K"}
+        if(a1e>v){v=a1e;n="AES-1400-enc"} if(a1d>v){v=a1d;n="AES-1400-dec"} if(a16>v){v=a16;n="AES-16KiB"}
+        if(c1e>v){v=c1e;n="ChaCha-1400-enc"} if(c1d>v){v=c1d;n="ChaCha-1400-dec"} if(c16>v){v=c16;n="ChaCha-16KiB"}
         if(p>v){v=p;n="CPU"} if(m>v){v=m;n="MEM"}
         printf "%.3f %s\n",v,n
     }')
@@ -1563,7 +1629,7 @@ main() {
         'BEGIN{printf "%.2f",i*.35+l*.45+p*.20}')"
     if (( latency_comparable == 1 )); then
         consistency_score="$(awk -v v="$consistency_f" 'BEGIN{printf "%d",v+0.5}')"
-        stab_f="$(awk -v t="$tail_f" -v c="$consistency_f" 'BEGIN{printf "%.2f",t*(.65+.35*c/100)}')"
+        stab_f="$(awk -v t="$tail_f" -v c="$consistency_f" 'BEGIN{printf "%.2f",t*(.65+.0035*c)}')"
         stab="$(awk -v v="$stab_f" 'BEGIN{printf "%d",v+0.5}')"
     else
         consistency_score="null"
@@ -1573,19 +1639,23 @@ main() {
 
     # Absolute 2026 mainstream-VPS anchors. 100 is a realistic near-term rental
     # ceiling, not a claim about the fastest possible physical CPU.
-    local sx sa1400 sa16k sc1400 sc16k scpu smem
-    local handshake_score packet_f packet_score stream_f stream_score crypto_f crypto_score
-    local system_f system_score xtls_f xtls_score generic_f generic_score
+    local sx sa1400e sa1400d sa16k sc1400e sc1400d sc16k scpu smem
+    local aes_packet_f cha_packet_f handshake_score packet_f packet_score stream_f stream_score crypto_f crypto_score
+    local system_f system_score vpn_f vpn_score
     sx="$(vpn_higher_score "$x_med" 12000 18000 26000 36000 45000)"
-    sa1400="$(vpn_higher_score "$aes1400_med" 600000000 1200000000 2200000000 3800000000 5500000000)"
+    sa1400e="$(vpn_higher_score "$aes1400e_med" 600000000 1200000000 2200000000 3800000000 5500000000)"
+    sa1400d="$(vpn_higher_score "$aes1400d_med" 600000000 1200000000 2200000000 3800000000 5500000000)"
     sa16k="$(vpn_higher_score "$aes16k_med" 1500000000 2500000000 4500000000 8500000000 12000000000)"
-    sc1400="$(vpn_higher_score "$cha1400_med" 450000000 800000000 1300000000 1900000000 2600000000)"
+    sc1400e="$(vpn_higher_score "$cha1400e_med" 450000000 800000000 1300000000 1900000000 2600000000)"
+    sc1400d="$(vpn_higher_score "$cha1400d_med" 450000000 800000000 1300000000 1900000000 2600000000)"
     sc16k="$(vpn_higher_score "$cha16k_med" 900000000 1400000000 2000000000 3200000000 4500000000)"
     scpu="$(vpn_higher_score "$cpu_med" 300 500 900 1600 2500)"
     smem="$(vpn_higher_score "$ram_med" 4096 8192 16384 28672 45056)"
 
     handshake_score="$(awk -v v="$sx" 'BEGIN{printf "%d",v+0.5}')"
-    packet_f="$(awk -v a="$sa1400" -v c="$sc1400" 'BEGIN{printf "%.2f",a*.50+c*.50}')"
+    aes_packet_f="$(awk -v e="$sa1400e" -v d="$sa1400d" 'BEGIN{printf "%.2f",e*.50+d*.50}')"
+    cha_packet_f="$(awk -v e="$sc1400e" -v d="$sc1400d" 'BEGIN{printf "%.2f",e*.50+d*.50}')"
+    packet_f="$(awk -v a="$aes_packet_f" -v c="$cha_packet_f" 'BEGIN{printf "%.2f",a*.50+c*.50}')"
     packet_score="$(awk -v v="$packet_f" 'BEGIN{printf "%d",v+0.5}')"
     stream_f="$(awk -v a="$sa16k" -v c="$sc16k" 'BEGIN{printf "%.2f",a*.50+c*.50}')"
     stream_score="$(awk -v v="$stream_f" 'BEGIN{printf "%d",v+0.5}')"
@@ -1595,15 +1665,13 @@ main() {
     system_score="$(awk -v v="$system_f" 'BEGIN{printf "%d",v+0.5}')"
 
     if (( latency_comparable == 1 )); then
-        xtls_f="$(awk -v l="$latency_f" -v p="$scpu" -v h="$sx" -v s="$stream_f" -v m="$smem" \
-            'BEGIN{printf "%.2f",l*.50+p*.25+h*.10+s*.10+m*.05}')"
-        generic_f="$(awk -v l="$latency_f" -v p="$scpu" -v h="$sx" -v pk="$packet_f" -v s="$stream_f" -v m="$smem" \
-            'BEGIN{printf "%.2f",l*.40+p*.20+h*.10+pk*.20+s*.05+m*.05}')"
-        xtls_score="$(awk -v v="$xtls_f" 'BEGIN{printf "%d",v+0.5}')"
-        generic_score="$(awk -v v="$generic_f" 'BEGIN{printf "%d",v+0.5}')"
+        # One protocol-neutral result: latency and one-core CPU dominate, while
+        # packet, handshake, stream crypto, and memory refine close comparisons.
+        vpn_f="$(awk -v l="$latency_f" -v p="$scpu" -v pk="$packet_f" -v h="$sx" -v s="$stream_f" -v m="$smem" \
+            'BEGIN{printf "%.2f",l*.40+p*.30+pk*.15+h*.05+s*.05+m*.05}')"
+        vpn_score="$(awk -v v="$vpn_f" 'BEGIN{printf "%d",v+0.5}')"
     else
-        xtls_f="null"; xtls_score="null"
-        generic_f="null"; generic_score="null"
+        vpn_f="null"; vpn_score="null"
     fi
 
     # Cheap diagnostics for quota/oversell symptoms during the same short run.
@@ -1628,106 +1696,125 @@ main() {
         (( cg_throttled_usec_delta < 0 )) && cg_throttled_usec_delta=0
     fi
 
-    say "${BOLD}LATENCY${RESET}  ${DIM}(cyclictest p99.9; WORST = worst sample in iteration)${RESET}"
-    printf '%-5s %10s %10s %10s %3s\n' "ITER" "IDLE" "LOAD" "WORST" ""
-    printf '%s\n' "---------------------------------------------"
-    while IFS=$'\t' read -r ri r_idle r_load r_imax r_lmax r_x r_a1 r_a16 r_c1 r_c16 r_cpu r_r r_d; do
-        local r_worst flag
-        r_worst="$(awk -v a="$r_imax" -v b="$r_lmax" 'BEGIN{print (a>b?a:b)}')"
-        flag="$(latency_anomaly_flag "$r_idle" "$r_load" "$r_worst" "$idle_med" "$load_med" "$worst_med")"
-        printf '%-5s %10s %10s %10s %3s\n' "$ri" "$(fmt_latency_us "$r_idle")" "$(fmt_latency_us "$r_load")" "$(fmt_latency_us "$r_worst")" "$flag"
-    done <"$TMP_BASE/iterations.tsv"
+    local cpu_score mem_score
+    cpu_score="$(awk -v v="$scpu" 'BEGIN{printf "%d",v+0.5}')"
+    mem_score="$(awk -v v="$smem" 'BEGIN{printf "%d",v+0.5}')"
 
-    say ""
-    say "${BOLD}PERFORMANCE${RESET}"
-    printf '%-5s %9s %9s %9s %9s %9s %9s %9s %9s %4s\n' \
-        "ITER" "X25519" "AES-1.4K" "AES-16K" "CHA-1.4K" "CHA-16K" "CPU" "MEM" "DISK" "FLAG"
-    printf '%s\n' "--------------------------------------------------------------------------------------------------------"
-    while IFS=$'\t' read -r ri r_idle r_load r_imax r_lmax r_x r_a1 r_a16 r_c1 r_c16 r_cpu r_r r_d; do
-        local flag
-        flag="$(performance_anomaly_flag "$r_x" "$r_a1" "$r_a16" "$r_c1" "$r_c16" "$r_cpu" "$r_r" "$r_d" \
-            "$x_med" "$aes1400_med" "$aes16k_med" "$cha1400_med" "$cha16k_med" "$cpu_med" "$ram_med" "$disk_med")"
-        printf '%-5s %9s %9s %9s %9s %9s %9s %9s %9s %4s\n' \
-            "$ri" "$(fmt_x25519 "$r_x")" "$(fmt_crypto "$r_a1")" "$(fmt_crypto "$r_a16")" \
-            "$(fmt_crypto "$r_c1")" "$(fmt_crypto "$r_c16")" "$(fmt_cpu "$r_cpu")" \
-            "$(fmt_ram "$r_r")" "$(fmt_latency_ms "$r_d")" "$flag"
-    done <"$TMP_BASE/iterations.tsv"
-
-    say ""
     if (( latency_comparable == 1 )); then
-        printf '%sLATENCY%s ' "$BOLD" "$RESET"; color_score "$latency_score"; printf '/100\n'
+        printf '%sLATENCY%s  ' "$BOLD" "$RESET"
+        color_score "$latency_score"
+        printf '\n'
     else
-        printf '%sLATENCY%s N/A  %s(%s)%s\n' "$BOLD" "$RESET" "$RED" "$latency_compat_reason" "$RESET"
+        printf '%sLATENCY%s  N/A  %s(%s)%s\n' "$BOLD" "$RESET" "$RED" "$latency_compat_reason" "$RESET"
     fi
-    printf '  idle     %-9s tail %-9s drift %s\n' "$(fmt_latency_us "$idle_med")" "$(fmt_latency_us "$idle_p9999")" "$(fmt_latency_us "$idle_drift_us")"
-    printf '  load     %-9s tail %-9s drift %s\n' "$(fmt_latency_us "$load_med")" "$(fmt_latency_us "$load_p9999")" "$(fmt_latency_us "$load_drift_us")"
-    printf '  worst    %s\n' "$(fmt_latency_us "$worst_all")"
-    printf '  spikes   >=5ms  idle %s (%s/M)  load %s (%s/M)\n' \
+    printf '  %-20s %s\n' "idle p99.9" "$(fmt_latency_us "$idle_med")"
+    printf '  %-20s %s\n' "idle p99.99" "$(fmt_latency_us "$idle_p9999")"
+    printf '  %-20s %s\n' "load p99.9" "$(fmt_latency_us "$load_med")"
+    printf '  %-20s %s\n' "load p99.99" "$(fmt_latency_us "$load_p9999")"
+    printf '  %-20s %s\n' "worst" "$(fmt_latency_us "$worst_all")"
+    printf '  %-20s idle %s | load %s\n' "drift" "$(fmt_latency_us "$idle_drift_us")" "$(fmt_latency_us "$load_drift_us")"
+    printf '  %-20s idle %s (%s per million) | load %s (%s per million)\n' "spikes >=5ms" \
         "$idle_gt5_count" "$(awk -v v="$idle_gt5_rate" 'BEGIN{printf "%.1f",v}')" \
         "$load_gt5_count" "$(awk -v v="$load_gt5_rate" 'BEGIN{printf "%.1f",v}')"
-    printf '           >=10ms idle %s (%s/M)  load %s (%s/M)\n' \
+    printf '  %-20s idle %s (%s per million) | load %s (%s per million)\n' "spikes >=10ms" \
         "$idle_gt10_count" "$(awk -v v="$idle_gt10_rate" 'BEGIN{printf "%.1f",v}')" \
         "$load_gt10_count" "$(awk -v v="$load_gt10_rate" 'BEGIN{printf "%.1f",v}')"
 
     say ""
-    printf '%sCRYPTO%s ' "$BOLD" "$RESET"; color_score "$crypto_score"; printf '/100  %s(diagnostic blend)%s\n' "$DIM" "$RESET"
-    printf '  handshake proxy '; color_score "$handshake_score"; printf '/100  X25519 %-9s drop %s\n' "$(fmt_x25519 "$x_med")" "$(fmt_percent "$x_drop")"
-    printf '  packet proxy    '; color_score "$packet_score"; printf '/100  AES-1.4K %-9s  ChaCha-1.4K %-9s\n' "$(fmt_crypto "$aes1400_med")" "$(fmt_crypto "$cha1400_med")"
-    printf '             drops        %-9s              %s\n' "$(fmt_percent "$aes1400_drop")" "$(fmt_percent "$cha1400_drop")"
-    printf '  stream proxy    '; color_score "$stream_score"; printf '/100  AES-16K  %-9s  ChaCha-16K  %-9s\n' "$(fmt_crypto "$aes16k_med")" "$(fmt_crypto "$cha16k_med")"
-    printf '             drops        %-9s              %s\n' "$(fmt_percent "$aes16k_drop")" "$(fmt_percent "$cha16k_drop")"
+    printf '%sCRYPTO%s  ' "$BOLD" "$RESET"
+    color_score "$crypto_score"
+    printf '\n'
+    printf '  %-12s ' "handshake"
+    color_score "$handshake_score"
+    printf '\n'
+    printf '    %-22s %-20s (%s)\n' "X25519" "$(fmt_x25519 "$x_med")" "$(fmt_percent "$x_drop")"
+    printf '  %-12s ' "packet"
+    color_score "$packet_score"
+    printf '\n'
+    printf '    %-22s %-20s (%s)\n' "AES-GCM 1400 B enc" "$(fmt_crypto "$aes1400e_med")" "$(fmt_percent "$aes1400e_drop")"
+    printf '    %-22s %-20s (%s)\n' "AES-GCM 1400 B dec" "$(fmt_crypto "$aes1400d_med")" "$(fmt_percent "$aes1400d_drop")"
+    printf '    %-22s %-20s (%s)\n' "ChaCha 1400 B enc" "$(fmt_crypto "$cha1400e_med")" "$(fmt_percent "$cha1400e_drop")"
+    printf '    %-22s %-20s (%s)\n' "ChaCha 1400 B dec" "$(fmt_crypto "$cha1400d_med")" "$(fmt_percent "$cha1400d_drop")"
+    printf '  %-12s ' "stream"
+    color_score "$stream_score"
+    printf '\n'
+    printf '    %-22s %-20s (%s)\n' "AES-GCM 16 KiB enc" "$(fmt_crypto "$aes16k_med")" "$(fmt_percent "$aes16k_drop")"
+    printf '    %-22s %-20s (%s)\n' "ChaCha 16 KiB enc" "$(fmt_crypto "$cha16k_med")" "$(fmt_percent "$cha16k_drop")"
 
     say ""
-    printf '%sSYSTEM%s ' "$BOLD" "$RESET"; color_score "$system_score"; printf '/100  %s(80%% CPU / 20%% MEM)%s\n' "$DIM" "$RESET"
-    printf '  CPU      '; color_score "$(awk -v v="$scpu" 'BEGIN{printf "%d",v+0.5}')"; printf '/100  %-9s drop %s\n' "$(fmt_cpu "$cpu_med")" "$(fmt_percent "$cpu_drop")"
-    printf '  MEM      '; color_score "$(awk -v v="$smem" 'BEGIN{printf "%d",v+0.5}')"; printf '/100  %-9s drop %s  workset %sMiB\n' "$(fmt_ram "$ram_med")" "$(fmt_percent "$mem_drop")" "$MEM_BLOCK_MIB"
-    printf '  Disk              %-9s %s(diagnostic; excluded from every score)%s\n' "$(fmt_latency_ms "$disk_med")" "$DIM" "$RESET"
+    printf '%sSYSTEM%s  ' "$BOLD" "$RESET"
+    color_score "$system_score"
+    printf '\n'
+    printf '  %-12s ' "CPU"
+    color_score "$cpu_score"
+    printf '   %-20s (%s)\n' "$(fmt_cpu "$cpu_med")" "$(fmt_percent "$cpu_drop")"
+    printf '  %-12s ' "MEM"
+    color_score "$mem_score"
+    printf '   %-20s (%s)\n' "$(fmt_ram "$ram_med")" "$(fmt_percent "$mem_drop")"
+    printf '  %-12s %s MiB\n' "MEM workset" "$MEM_BLOCK_MIB"
 
     say ""
     if (( latency_comparable == 1 )); then
-        printf '%sSTABILITY%s ' "$BOLD" "$RESET"; color_score "$stab"; printf '/100  %s(short benchmark window)%s\n' "$DIM" "$RESET"
-        printf '  tail quality  '; color_score "$tail_score"; printf '/100\n'
-        printf '  consistency   '; color_score "$consistency_score"; printf '/100\n'
-        printf '  latency drift idle %s   load %s\n' "$(fmt_latency_us "$idle_drift_us")" "$(fmt_latency_us "$load_drift_us")"
-        printf '  perf worst    %s %s\n' "$(fmt_percent "$worst_perf_drop")" "$worst_perf_name"
+        printf '%sSTABILITY%s  ' "$BOLD" "$RESET"
+        color_score "$stab"
+        printf '\n'
+        printf '  %-20s ' "tail quality"
+        color_score "$tail_score"
+        printf '\n'
+        printf '  %-20s ' "consistency"
+        color_score "$consistency_score"
+        printf '\n'
+        printf '  %-20s idle %s | load %s\n' "latency drift" "$(fmt_latency_us "$idle_drift_us")" "$(fmt_latency_us "$load_drift_us")"
+        printf '  %-20s %s (%s)\n' "worst perf loss" "$worst_perf_name" "$(fmt_percent "$worst_perf_drop")"
     else
-        printf '%sSTABILITY%s N/A  %s(latency mode is not comparable)%s\n' "$BOLD" "$RESET" "$RED" "$RESET"
-        printf '  perf worst    %s %s\n' "$(fmt_percent "$worst_perf_drop")" "$worst_perf_name"
+        printf '%sSTABILITY%s  N/A  %s(latency mode is not comparable)%s\n' "$BOLD" "$RESET" "$RED" "$RESET"
+        printf '  %-20s %s (%s)\n' "worst perf loss" "$worst_perf_name" "$(fmt_percent "$worst_perf_drop")"
     fi
 
     say ""
-    say "${BOLD}HOST DIAGNOSTICS${RESET}  ${DIM}(not scored)${RESET}"
-    printf '  CPU steal       %s%% over %ss\n' "$(awk -v v="$steal_pct" 'BEGIN{printf "%.2f",v}')" "$diag_duration_s"
+    say "${BOLD}HOST DIAGNOSTICS${RESET}"
+    printf '  %-20s %s\n' "disk p99.9" "$(fmt_latency_ms "$disk_med")"
+    printf '  %-20s %s\n' "QUIC UDP RX max" "$(fmt_bytes_binary "$UDP_RMEM_MAX")"
+    printf '  %-20s %s\n' "QUIC UDP TX max" "$(fmt_bytes_binary "$UDP_WMEM_MAX")"
+    printf '  %-20s %s\n' "QUIC UDP target" "$(fmt_bytes_binary "$HYSTERIA2_UDP_RECOMMENDED_BYTES")"
+    case "$UDP_BUFFER_STATUS" in
+        ready)
+            printf '  %-20s ready\n' "QUIC UDP state"
+            ;;
+        below-recommendation)
+            printf '  %-20s below target\n' "QUIC UDP state"
+            ;;
+        *)
+            printf '  %-20s N/A\n' "QUIC UDP state"
+            ;;
+    esac
+    printf '  %-20s %s%% over %s s\n' "CPU steal" "$(awk -v v="$steal_pct" 'BEGIN{printf "%.2f",v}')" "$diag_duration_s"
     if [[ -n "$CGROUP_CPU_STAT" ]]; then
-        printf '  cgroup throttle %s in %s events\n' "$(fmt_duration_us "$cg_throttled_usec_delta")" "$cg_nr_throttled_delta"
+        printf '  %-20s %s in %s events\n' "cgroup throttle" "$(fmt_duration_us "$cg_throttled_usec_delta")" "$cg_nr_throttled_delta"
     else
-        printf '  cgroup throttle N/A\n'
+        printf '  %-20s N/A\n' "cgroup throttle"
     fi
 
     say ""
     say "${BOLD}RESULT${RESET}"
     if (( latency_comparable == 1 )); then
-        printf '  XTLS VISION  '; color_score "$xtls_score"; printf '/100  %s(host proxy; not Mbps)%s\n' "$DIM" "$RESET"
-        printf '  GENERIC VPN  '; color_score "$generic_score"; printf '/100  %s(host proxy; not Mbps)%s\n' "$DIM" "$RESET"
-        printf '  STABILITY    '; color_score "$stab"; printf '/100  (tail %s / consistency %s)\n' "$tail_score" "$consistency_score"
+        printf '  %-16s ' "VPN SCORE"
+        color_score "$vpn_score"
+        printf '\n'
     else
-        printf '  XTLS VISION  N/A\n'
-        printf '  GENERIC VPN  N/A\n'
-        printf '  STABILITY    N/A\n'
-        printf '  CRYPTO       '; color_score "$crypto_score"; printf '/100\n'
-        printf '  SYSTEM       '; color_score "$system_score"; printf '/100\n'
+        printf '  %-16s N/A\n' "VPN SCORE"
     fi
 
     RUN_COMPLETED=1
     print_debug_result
 
     say ""
-    say "${DIM}drift = max absolute p99.9 deviation from the median; drop = worst throughput loss vs median.${RESET}"
-    say "${DIM}STABILITY describes only this ~15-minute run; it cannot estimate events occurring once per hours/days.${RESET}"
-    say "${DIM}XTLS VISION = 50% latency + 25% CPU + 10% X25519 proxy + 10% 16K crypto + 5% MEM.${RESET}"
-    say "${DIM}GENERIC VPN = 40% latency + 20% CPU + 10% X25519 proxy + 20% 1.4K crypto + 5% 16K crypto + 5% MEM.${RESET}"
-    say "${DIM}Scores estimate local host potential, not Xray Mbps or network route quality. Disk enters no score.${RESET}"
-    say "${DIM}! = latency anomaly; P = scored performance anomaly; D = disk-only anomaly.${RESET}"
+    say "${DIM}Percentages in parentheses show the worst iteration loss from the median.${RESET}"
+    say "${DIM}STABILITY covers this benchmark run only; rare hourly or daily events are outside its scope.${RESET}"
+    say "${DIM}VPN SCORE estimates local host potential, not protocol throughput or network-route quality.${RESET}"
+    say "${DIM}VPN SCORE is 40% LATENCY, 30% CPU, 15% bidirectional packet crypto, 5% X25519, 5% stream crypto, and 5% MEM.${RESET}"
+    say "${DIM}Route RTT/loss, MTU, NIC/GSO, and Salamander/Gecko overhead are not measured.${RESET}"
+    say "${DIM}CRYPTO uses a piecewise-linear 2026 VPS grade. SYSTEM is 80% CPU and 20% MEM. Disk is diagnostic only.${RESET}"
 }
 
 main "$@"

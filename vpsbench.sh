@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # VPS responsiveness benchmark for Debian 13 / Ubuntu
-# Local-only benchmark traffic: CPU/scheduler/crypto/MEM/storage plus UDP/QUIC host diagnostics.
+# Local-only benchmark traffic: CPU/scheduler/crypto/MEM/storage.
 
 set -u
 set -o pipefail
@@ -8,9 +8,9 @@ export LC_ALL=C
 export LANG=C
 umask 077
 
-SCRIPT_VERSION="2.6.0"
+SCRIPT_VERSION="2.7.0"
 ITERATIONS="${VPSBENCH_ITERATIONS:-6}"
-CYCLIC_SEC="${VPSBENCH_CYCLIC_SEC:-45}"
+CYCLIC_SEC="${VPSBENCH_CYCLIC_SEC:-35}"
 CRYPTO_SEC="${VPSBENCH_CRYPTO_SEC:-5}"
 CPU_SEC="${VPSBENCH_CPU_SEC:-8}"
 RAM_SEC="${VPSBENCH_RAM_SEC:-8}"
@@ -21,9 +21,9 @@ FIO_SIZE_MB="${VPSBENCH_FIO_SIZE_MB:-256}"
 MEM_BLOCK_REQUEST_MIB="${VPSBENCH_MEM_MIB:-256}"
 LOAD_SLICE_MS="${VPSBENCH_LOAD_SLICE_MS:-1}"
 LOAD_CPU_METHOD="int64"
+LOAD_SETTLE_SEC=1
 WARMUP_SEC=1
-HYSTERIA2_UDP_RECOMMENDED_BYTES=16777216
-TASKS_PER_ITER=12
+TASKS_PER_ITER=14
 DEBUG_MODE=0
 DEBUG_JSON=""
 DEBUG_JSON_CREATED=0
@@ -55,15 +55,9 @@ AFFINITY_ACTIVE=0
 SINGLE_CORE_COMPARABLE=0
 MEM_BLOCK_MIB=0
 MEM_BLOCK_REDUCED=0
-CGROUP_CPU_STAT=""
 DIAG_START_EPOCH=0
 CPU_TOTAL_START=0
 CPU_STEAL_START=0
-CG_NR_THROTTLED_START=0
-CG_THROTTLED_USEC_START=0
-UDP_RMEM_MAX=0
-UDP_WMEM_MAX=0
-UDP_BUFFER_STATUS="unknown"
 
 usage() {
     cat <<'EOF'
@@ -440,24 +434,6 @@ choose_memory_block() {
     fi
 }
 
-find_cgroup_cpu_stat() {
-    local rel path
-    rel="$(awk -F: '$1=="0" {print $3; exit}' /proc/self/cgroup 2>/dev/null || true)"
-    if [[ -n "$rel" ]]; then
-        path="/sys/fs/cgroup${rel%/}/cpu.stat"
-        [[ "$rel" == "/" ]] && path="/sys/fs/cgroup/cpu.stat"
-        if [[ -r "$path" ]]; then
-            CGROUP_CPU_STAT="$path"
-            return 0
-        fi
-    fi
-    if [[ -r /sys/fs/cgroup/cpu.stat ]]; then
-        CGROUP_CPU_STAT="/sys/fs/cgroup/cpu.stat"
-        return 0
-    fi
-    CGROUP_CPU_STAT=""
-}
-
 read_cpu_totals() {
     local cpu="${1:-}"
     local row="cpu"
@@ -470,41 +446,11 @@ read_cpu_totals() {
     }' /proc/stat 2>/dev/null
 }
 
-read_cgroup_value() {
-    local key="$1" file="$2"
-    [[ -r "$file" ]] || { printf '0'; return 0; }
-    awk -v k="$key" '$1==k {print $2; found=1; exit} END{if(!found) print 0}' "$file" 2>/dev/null
-}
-
 start_host_diagnostics() {
     local vals
     DIAG_START_EPOCH="$(date +%s)"
     vals="$(read_cpu_totals "$BENCH_CPU")"
     read -r CPU_TOTAL_START CPU_STEAL_START <<<"${vals:-0 0}"
-    find_cgroup_cpu_stat
-    if [[ -n "$CGROUP_CPU_STAT" ]]; then
-        CG_NR_THROTTLED_START="$(read_cgroup_value nr_throttled "$CGROUP_CPU_STAT")"
-        CG_THROTTLED_USEC_START="$(read_cgroup_value throttled_usec "$CGROUP_CPU_STAT")"
-    fi
-}
-
-read_uint_file() {
-    local file="$1" value
-    value="$(cat "$file" 2>/dev/null || true)"
-    [[ "$value" =~ ^[0-9]+$ ]] && printf '%s' "$value" || printf '0'
-}
-
-collect_udp_quic_diagnostics() {
-    UDP_RMEM_MAX="$(read_uint_file /proc/sys/net/core/rmem_max)"
-    UDP_WMEM_MAX="$(read_uint_file /proc/sys/net/core/wmem_max)"
-
-    if (( UDP_RMEM_MAX <= 0 || UDP_WMEM_MAX <= 0 )); then
-        UDP_BUFFER_STATUS="unknown"
-    elif (( UDP_RMEM_MAX >= HYSTERIA2_UDP_RECOMMENDED_BYTES && UDP_WMEM_MAX >= HYSTERIA2_UDP_RECOMMENDED_BYTES )); then
-        UDP_BUFFER_STATUS="ready"
-    else
-        UDP_BUFFER_STATUS="below-recommendation"
-    fi
 }
 
 run_warmup() {
@@ -555,10 +501,10 @@ prepare_fio_file() {
 # Weighted benchmark time, used only for terminal progress.
 # Seven crypto tests: X25519, packet AEAD encrypt/decrypt at 1400 B,
 # and stream-oriented AEAD encryption at 16 KiB.
-PER_ITER_WORK=$(( CYCLIC_SEC * 2 + CRYPTO_SEC * 7 + CPU_SEC + RAM_SEC + DISK_SEC ))
+PER_ITER_WORK=$(( CYCLIC_SEC * 4 + CRYPTO_SEC * 7 + CPU_SEC + RAM_SEC + DISK_SEC ))
 TOTAL_WORK=$(( PER_ITER_WORK * ITERATIONS ))
 WARMUP_WORK=$(( WARMUP_SEC * 9 + COOLDOWN_SEC ))
-EST_RUNTIME=$(( TOTAL_WORK + COOLDOWN_SEC * (ITERATIONS - 1) + WARMUP_WORK + 2 ))
+EST_RUNTIME=$(( TOTAL_WORK + COOLDOWN_SEC * (ITERATIONS - 1) + WARMUP_WORK + LOAD_SETTLE_SEC * 3 * ITERATIONS + 2 ))
 DONE_WORK=0
 LAST_VALUE=""
 
@@ -710,18 +656,38 @@ setup_cyclic_cmd() {
 
 run_cyclic() {
     local mode="$1" iter="$2" task="$3" hist="$4" log="$5"
-    local name="latency idle"
-    local stress_log="$TMP_BASE/stress-${iter}.log"
+    local name load_percent=0
+    local stress_log="$TMP_BASE/stress-${mode}-${iter}.log"
     STRESS_PID=""
 
-    if [[ "$mode" == "load" ]]; then
-        name="latency CPU 50% smooth"
-        "${BENCH_PREFIX[@]}" stress-ng --cpu 1 --cpu-load 50 \
+    case "$mode" in
+        idle)
+            name="latency idle"
+            ;;
+        load25)
+            name="latency CPU 25% smooth"
+            load_percent=25
+            ;;
+        load50)
+            name="latency CPU 50% smooth"
+            load_percent=50
+            ;;
+        load75)
+            name="latency CPU 75% smooth"
+            load_percent=75
+            ;;
+        *)
+            die "Internal error: unsupported latency mode $mode"
+            ;;
+    esac
+
+    if (( load_percent > 0 )); then
+        "${BENCH_PREFIX[@]}" stress-ng --cpu 1 --cpu-load "$load_percent" \
             --cpu-load-slice "$LOAD_SLICE_MS" --cpu-method "$LOAD_CPU_METHOD" \
             --timeout "$((CYCLIC_SEC + 4))s" --quiet 200>&- </dev/null >"$stress_log" 2>&1 &
         STRESS_PID=$!
         record_pid_state "$TMP_BASE/.stress-pid" "$STRESS_PID"
-        sleep 1 200>&-
+        sleep "$LOAD_SETTLE_SEC" 200>&-
     fi
 
     if ! run_timed_capture "$CYCLIC_SEC" "$iter" "$task" "$name" "$log" \
@@ -953,26 +919,6 @@ fmt_ram() {
         }'
 }
 
-fmt_duration_us() {
-    awk -v u="$1" 'function trim(s){if(index(s,".")){sub(/0+$/, "", s);sub(/\.$/, "", s)}return s}
-        BEGIN {
-            if (u < 1000) printf "%.0fus", u;
-            else if (u < 1000000) {s=sprintf("%.1f",u/1000); printf "%sms",trim(s)}
-            else {s=sprintf("%.2f",u/1000000); printf "%s s",trim(s)}
-        }'
-}
-
-fmt_bytes_binary() {
-    awk -v v="$1" 'function trim(s){if(index(s,".")){sub(/0+$/, "", s);sub(/\.$/, "", s)}return s}
-        BEGIN {
-            if (v <= 0) {printf "N/A"; exit}
-            if (v >= 1073741824) {s=sprintf("%.2f",v/1073741824); printf "%s GiB",trim(s)}
-            else if (v >= 1048576) {s=sprintf("%.2f",v/1048576); printf "%s MiB",trim(s)}
-            else if (v >= 1024) {s=sprintf("%.1f",v/1024); printf "%s KiB",trim(s)}
-            else printf "%.0f B",v
-        }'
-}
-
 fmt_percent() {
     awk -v v="$1" 'function trim(s){if(index(s,".")){sub(/0+$/, "", s);sub(/\.$/, "", s)}return s}
         BEGIN {s=(v<10?sprintf("%.1f",v):sprintf("%.0f",v)); printf "%s%%",trim(s)}'
@@ -1070,7 +1016,7 @@ create_debug_json() {
     if (( CYCLIC_NATURAL_PM == 1 && SINGLE_CORE_COMPARABLE == 1 )); then latency_ready_json=true; else latency_ready_json=false; fi
 
     jq -n \
-        --arg schema "7" \
+        --arg schema "8" \
         --arg version "$SCRIPT_VERSION" \
         --arg state "$state" \
         --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -1085,8 +1031,6 @@ create_debug_json() {
         --arg cyclic_pm_mode "$CYCLIC_PM_MODE" \
         --arg load_method "$LOAD_CPU_METHOD" \
         --arg fio_engine "$fio_engine" \
-        --arg cgroup_cpu_stat "${CGROUP_CPU_STAT:-}" \
-        --arg udp_buffer_status "${UDP_BUFFER_STATUS:-unknown}" \
         --arg cyclic_version "$(version_line cyclictest --version)" \
         --arg stress_version "$(version_line stress-ng --version)" \
         --arg sysbench_version "$(version_line sysbench --version)" \
@@ -1107,14 +1051,12 @@ create_debug_json() {
         --argjson mem_requested_mib "$MEM_BLOCK_REQUEST_MIB" \
         --argjson mem_actual_mib "${MEM_BLOCK_MIB:-0}" \
         --argjson load_slice_ms "$LOAD_SLICE_MS" \
+        --argjson load_settle_sec "$LOAD_SETTLE_SEC" \
         --argjson natural_pm "$natural_pm_json" \
         --argjson affinity "$affinity_json" \
         --argjson single_core "$single_core_json" \
         --argjson mem_reduced "$mem_reduced_json" \
         --argjson latency_ready "$latency_ready_json" \
-        --argjson udp_rmem_max "${UDP_RMEM_MAX:-0}" \
-        --argjson udp_wmem_max "${UDP_WMEM_MAX:-0}" \
-        --argjson udp_recommended "$HYSTERIA2_UDP_RECOMMENDED_BYTES" \
         --rawfile it "$it_file" \
         --rawfile cyc "$cyc_file" '
         def rows($s): $s | split("\n") | map(select(length > 0) | split("\t"));
@@ -1136,7 +1078,8 @@ create_debug_json() {
             sysbench: $sysbench_version, fio: $fio_version, openssl: $openssl_version
           },
           config: {
-            iterations: $iterations_cfg, cyclic_sec: $cyclic_sec,
+            iterations: $iterations_cfg, cyclic_sec_per_profile: $cyclic_sec,
+            latency_profiles: ["idle","load_25","load_50","load_75"],
             crypto_sec: $crypto_sec, cpu_sec: $cpu_sec, mem_sec: $mem_sec,
             disk_sec: $disk_sec, cooldown_sec: $cooldown_sec,
             hist_max_us: $hist_max_us, fio_size_mib: $fio_size_mib,
@@ -1144,7 +1087,7 @@ create_debug_json() {
             mem_working_set_requested_mib: $mem_requested_mib,
             mem_working_set_actual_mib: $mem_actual_mib,
             mem_working_set_reduced: $mem_reduced,
-            load: {cpu_percent:50, workers:1, method:$load_method, slice_ms:$load_slice_ms},
+            load: {cpu_percent_targets:[25,50,75],workers:1,method:$load_method,slice_ms:$load_slice_ms,settle_sec:$load_settle_sec},
             crypto_buffer_bytes: [1400,16384],
             packet_crypto_directions: ["encrypt","decrypt"],
             stream_crypto_directions: ["encrypt"]
@@ -1157,35 +1100,28 @@ create_debug_json() {
             latency_comparable: $latency_ready,
             latency_requirement: "natural power management plus a single-vCPU test domain"
           },
-          diagnostics_source: {cgroup_cpu_stat: (if $cgroup_cpu_stat=="" then null else $cgroup_cpu_stat end)},
-          udp_quic_host: {
-            socket_buffer_max_bytes:{receive:$udp_rmem_max,send:$udp_wmem_max},
-            hysteria2_recommended_min_bytes:$udp_recommended,
-            recommendation_met:(if $udp_buffer_status=="unknown" then null else ($udp_buffer_status=="ready") end),
-            status:$udp_buffer_status,
-            scored:false,
-            score_weight:0
-          },
           completed_iterations: $n,
           iterations: [range(0;$n) as $k |
             ($i[$k]) as $r | ($c[$k]) as $d |
             {
               iteration: ($r[0]|tonumber),
               latency: {
-                idle: {p99_9_us:($d[1]|tonumber), avg_us:($d[2]|tonumber), max_us:($d[3]|tonumber), ge_1ms:($d[4]|tonumber), ge_5ms:($d[5]|tonumber), ge_10ms:($d[6]|tonumber)},
-                load: {p99_9_us:($d[7]|tonumber), avg_us:($d[8]|tonumber), max_us:($d[9]|tonumber), ge_1ms:($d[10]|tonumber), ge_5ms:($d[11]|tonumber), ge_10ms:($d[12]|tonumber)}
+                idle: {p99_9_us:($d[1]|tonumber),avg_us:($d[2]|tonumber),max_us:($d[3]|tonumber),ge_1ms:($d[4]|tonumber),ge_5ms:($d[5]|tonumber),ge_10ms:($d[6]|tonumber)},
+                load_25: {p99_9_us:($d[7]|tonumber),avg_us:($d[8]|tonumber),max_us:($d[9]|tonumber),ge_1ms:($d[10]|tonumber),ge_5ms:($d[11]|tonumber),ge_10ms:($d[12]|tonumber)},
+                load_50: {p99_9_us:($d[13]|tonumber),avg_us:($d[14]|tonumber),max_us:($d[15]|tonumber),ge_1ms:($d[16]|tonumber),ge_5ms:($d[17]|tonumber),ge_10ms:($d[18]|tonumber)},
+                load_75: {p99_9_us:($d[19]|tonumber),avg_us:($d[20]|tonumber),max_us:($d[21]|tonumber),ge_1ms:($d[22]|tonumber),ge_5ms:($d[23]|tonumber),ge_10ms:($d[24]|tonumber)}
               },
               crypto: {
-                x25519_ops_s:($r[5]|tonumber),
-                aes_gcm_1400_encrypt_B_s:($r[6]|tonumber),
-                aes_gcm_1400_decrypt_B_s:($r[7]|tonumber),
-                aes_gcm_16k_encrypt_B_s:($r[8]|tonumber),
-                chacha20_poly1305_1400_encrypt_B_s:($r[9]|tonumber),
-                chacha20_poly1305_1400_decrypt_B_s:($r[10]|tonumber),
-                chacha20_poly1305_16k_encrypt_B_s:($r[11]|tonumber)
+                x25519_ops_s:($r[9]|tonumber),
+                aes_gcm_1400_encrypt_B_s:($r[10]|tonumber),
+                aes_gcm_1400_decrypt_B_s:($r[11]|tonumber),
+                aes_gcm_16k_encrypt_B_s:($r[12]|tonumber),
+                chacha20_poly1305_1400_encrypt_B_s:($r[13]|tonumber),
+                chacha20_poly1305_1400_decrypt_B_s:($r[14]|tonumber),
+                chacha20_poly1305_16k_encrypt_B_s:($r[15]|tonumber)
               },
-              system: {cpu_events_s:($r[12]|tonumber), mem_MiB_s:($r[13]|tonumber)},
-              disk_diagnostic: {p99_9_ms:($r[14]|tonumber)}
+              system: {cpu_events_s:($r[16]|tonumber),mem_MiB_s:($r[17]|tonumber)},
+              disk_diagnostic: {p99_9_ms:($r[18]|tonumber)}
             }
           ]
         }' >"$tmp_json" || return 1
@@ -1195,10 +1131,13 @@ create_debug_json() {
             --argjson latency_comparable "$latency_comparable" \
             --arg latency_reason "$latency_compat_reason" \
             --argjson idle_med "$idle_med" --argjson idle_cv "$idle_cv" --argjson idle_min "$idle_min" --argjson idle_max_p999 "$idle_worst" --argjson idle_mean "$idle_mean" --argjson idle_drift "$idle_drift_us" \
-            --argjson load_med "$load_med" --argjson load_cv "$load_cv" --argjson load_min "$load_min" --argjson load_max_p999 "$load_worst" --argjson load_mean "$load_mean" --argjson load_drift "$load_drift_us" \
-            --argjson idle_p9999 "$idle_p9999" --argjson idle_max "$idle_max_all" --argjson idle_ge1 "$idle_gt1_count" --argjson idle_ge5 "$idle_gt5_count" --argjson idle_ge10 "$idle_gt10_count" --argjson idle_samples "$idle_samples" \
-            --argjson load_p9999 "$load_p9999" --argjson load_max "$load_max_all" --argjson load_ge1 "$load_gt1_count" --argjson load_ge5 "$load_gt5_count" --argjson load_ge10 "$load_gt10_count" --argjson load_samples "$load_samples" \
-            --argjson idle_ge5_rate "$idle_gt5_rate" --argjson load_ge5_rate "$load_gt5_rate" --argjson idle_ge10_rate "$idle_gt10_rate" --argjson load_ge10_rate "$load_gt10_rate" \
+            --argjson l25_med "$load25_med" --argjson l25_cv "$load25_cv" --argjson l25_min "$load25_min" --argjson l25_max_p999 "$load25_worst" --argjson l25_mean "$load25_mean" --argjson l25_drift "$load25_drift_us" \
+            --argjson l50_med "$load50_med" --argjson l50_cv "$load50_cv" --argjson l50_min "$load50_min" --argjson l50_max_p999 "$load50_worst" --argjson l50_mean "$load50_mean" --argjson l50_drift "$load50_drift_us" \
+            --argjson l75_med "$load75_med" --argjson l75_cv "$load75_cv" --argjson l75_min "$load75_min" --argjson l75_max_p999 "$load75_worst" --argjson l75_mean "$load75_mean" --argjson l75_drift "$load75_drift_us" \
+            --argjson idle_p9999 "$idle_p9999" --argjson idle_max "$idle_max_all" --argjson idle_ge1 "$idle_gt1_count" --argjson idle_ge5 "$idle_gt5_count" --argjson idle_ge10 "$idle_gt10_count" --argjson idle_samples "$idle_samples" --argjson idle_ge5_rate "$idle_gt5_rate" --argjson idle_ge10_rate "$idle_gt10_rate" \
+            --argjson l25_p9999 "$load25_p9999" --argjson l25_max "$load25_max_all" --argjson l25_ge1 "$load25_gt1_count" --argjson l25_ge5 "$load25_gt5_count" --argjson l25_ge10 "$load25_gt10_count" --argjson l25_samples "$load25_samples" --argjson l25_ge5_rate "$load25_gt5_rate" --argjson l25_ge10_rate "$load25_gt10_rate" \
+            --argjson l50_p9999 "$load50_p9999" --argjson l50_max "$load50_max_all" --argjson l50_ge1 "$load50_gt1_count" --argjson l50_ge5 "$load50_gt5_count" --argjson l50_ge10 "$load50_gt10_count" --argjson l50_samples "$load50_samples" --argjson l50_ge5_rate "$load50_gt5_rate" --argjson l50_ge10_rate "$load50_gt10_rate" \
+            --argjson l75_p9999 "$load75_p9999" --argjson l75_max "$load75_max_all" --argjson l75_ge1 "$load75_gt1_count" --argjson l75_ge5 "$load75_gt5_count" --argjson l75_ge10 "$load75_gt10_count" --argjson l75_samples "$load75_samples" --argjson l75_ge5_rate "$load75_gt5_rate" --argjson l75_ge10_rate "$load75_gt10_rate" \
             --argjson x_med "$x_med" --argjson x_cv "$x_cv" --argjson x_min "$x_min" --argjson x_max "$x_max" --argjson x_mean "$x_mean" --argjson x_drop "$x_drop" \
             --argjson a1e_med "$aes1400e_med" --argjson a1e_cv "$aes1400e_cv" --argjson a1e_min "$aes1400e_min" --argjson a1e_max "$aes1400e_max" --argjson a1e_mean "$aes1400e_mean" --argjson a1e_drop "$aes1400e_drop" \
             --argjson a1d_med "$aes1400d_med" --argjson a1d_cv "$aes1400d_cv" --argjson a1d_min "$aes1400d_min" --argjson a1d_max "$aes1400d_max" --argjson a1d_mean "$aes1400d_mean" --argjson a1d_drop "$aes1400d_drop" \
@@ -1210,27 +1149,29 @@ create_debug_json() {
             --argjson mem_med "$ram_med" --argjson mem_cv "$ram_cv" --argjson mem_min "$ram_min" --argjson mem_max "$ram_max" --argjson mem_mean "$ram_mean" --argjson mem_drop "$mem_drop" \
             --argjson disk_med "$disk_med" --argjson disk_cv "$disk_cv" --argjson disk_min "$disk_min" --argjson disk_max "$disk_max" --argjson disk_mean "$disk_mean" \
             --argjson latency_score "$latency_score" --argjson latency_base "$latency_base_f" --argjson latency_spike_quality "$latency_spike_quality" --argjson latency_spike_penalty "$latency_spike_penalty" \
+            --argjson spike25_quality "$spike25_quality" --argjson spike50_quality "$spike50_quality" --argjson spike75_quality "$spike75_quality" \
             --argjson crypto_score "$crypto_score" --argjson handshake_score "$handshake_score" --argjson packet_score "$packet_score" --argjson stream_score "$stream_score" \
-            --argjson system_score "$system_score" --argjson vpn_score "$vpn_score" --argjson stability "$stab" \
-            --argjson tail_score "$tail_score" --argjson consistency_score "$consistency_score" \
-            --argjson s_idle "$s_idle" --argjson s_load "$s_load" --argjson s_idle9999 "$s_idle9999" --argjson s_load9999 "$s_load9999" --argjson s_worst "$s_worst" \
-            --argjson sx "$sx" \
-            --argjson sa1400e "$sa1400e" --argjson sa1400d "$sa1400d" --argjson sa16k "$sa16k" \
-            --argjson sc1400e "$sc1400e" --argjson sc1400d "$sc1400d" --argjson sc16k "$sc16k" \
-            --argjson scpu "$scpu" --argjson smem "$smem" \
-            --argjson tail_idle_s "$tail_idle_s" --argjson tail_load_s "$tail_load_s" --argjson idle_spike5_s "$idle_spike5_s" --argjson load_spike5_s "$load_spike5_s" \
-            --argjson idle_spike10_s "$idle_spike10_s" --argjson load_spike10_s "$load_spike10_s" --argjson tail_worst_s "$tail_worst_s" \
-            --argjson idle_drift_s "$idle_drift_s" --argjson load_drift_s "$load_drift_s" --argjson perf_repeat_s "$perf_repeat_s" \
+            --argjson system_score "$system_score" --argjson vpn_score "$vpn_score" --argjson stability "$stab" --argjson tail_score "$tail_score" --argjson consistency_score "$consistency_score" \
+            --argjson s_idle "$s_idle" --argjson s_l25 "$s_load25" --argjson s_l50 "$s_load50" --argjson s_l75 "$s_load75" \
+            --argjson s_idle9999 "$s_idle9999" --argjson s_l25_9999 "$s_load25_9999" --argjson s_l50_9999 "$s_load50_9999" --argjson s_l75_9999 "$s_load75_9999" --argjson s_worst "$s_worst" \
+            --argjson sx "$sx" --argjson sa1400e "$sa1400e" --argjson sa1400d "$sa1400d" --argjson sa16k "$sa16k" --argjson sc1400e "$sc1400e" --argjson sc1400d "$sc1400d" --argjson sc16k "$sc16k" --argjson scpu "$scpu" --argjson smem "$smem" \
+            --argjson tail_idle_s "$tail_idle_s" --argjson tail_l25_s "$tail_load25_s" --argjson tail_l50_s "$tail_load50_s" --argjson tail_l75_s "$tail_load75_s" --argjson tail_worst_s "$tail_worst_s" \
+            --argjson idle_spike5_s "$idle_spike5_s" --argjson l25_spike5_s "$load25_spike5_s" --argjson l50_spike5_s "$load50_spike5_s" --argjson l75_spike5_s "$load75_spike5_s" \
+            --argjson idle_spike10_s "$idle_spike10_s" --argjson l25_spike10_s "$load25_spike10_s" --argjson l50_spike10_s "$load50_spike10_s" --argjson l75_spike10_s "$load75_spike10_s" \
+            --argjson idle_drift_s "$idle_drift_s" --argjson l25_drift_s "$load25_drift_s" --argjson l50_drift_s "$load50_drift_s" --argjson l75_drift_s "$load75_drift_s" --argjson perf_repeat_s "$perf_repeat_s" \
             --argjson worst_perf_drop "$worst_perf_drop" --arg worst_perf_name "$worst_perf_name" \
-            --argjson steal_pct "$steal_pct" --argjson diag_duration_s "$diag_duration_s" \
-            --argjson cg_nr_throttled "$cg_nr_throttled_delta" --argjson cg_throttled_usec "$cg_throttled_usec_delta" '
+            --argjson steal_pct "$steal_pct" --argjson diag_duration_s "$diag_duration_s" '
+            def lat($med;$p9999;$mx;$samples;$ge1;$ge5;$ge10;$r5;$r10;$drift;$cv;$mn;$mx999;$mean):
+              {p99_9_median_us:$med,p99_99_us:$p9999,worst_us:$mx,samples:$samples,ge_1ms:$ge1,ge_5ms:$ge5,ge_10ms:$ge10,ge_5ms_per_million:$r5,ge_10ms_per_million:$r10,p99_9_drift_us:$drift,p99_9_cv_percent:$cv,p99_9_min_us:$mn,p99_9_max_us:$mx999,p99_9_mean_us:$mean};
             .compatibility.latency_comparable = ($latency_comparable == 1) |
             .compatibility.incompatibility_reason = (if $latency_comparable == 1 then null else $latency_reason end) |
             . + {
               aggregate: {
                 latency: {
-                  idle: {p99_9_median_us:$idle_med, p99_99_us:$idle_p9999, worst_us:$idle_max, samples:$idle_samples, ge_1ms:$idle_ge1, ge_5ms:$idle_ge5, ge_10ms:$idle_ge10, ge_5ms_per_million:$idle_ge5_rate, ge_10ms_per_million:$idle_ge10_rate, p99_9_drift_us:$idle_drift, p99_9_cv_percent:$idle_cv, p99_9_min_us:$idle_min, p99_9_max_us:$idle_max_p999, p99_9_mean_us:$idle_mean},
-                  load: {p99_9_median_us:$load_med, p99_99_us:$load_p9999, worst_us:$load_max, samples:$load_samples, ge_1ms:$load_ge1, ge_5ms:$load_ge5, ge_10ms:$load_ge10, ge_5ms_per_million:$load_ge5_rate, ge_10ms_per_million:$load_ge10_rate, p99_9_drift_us:$load_drift, p99_9_cv_percent:$load_cv, p99_9_min_us:$load_min, p99_9_max_us:$load_max_p999, p99_9_mean_us:$load_mean}
+                  idle:lat($idle_med;$idle_p9999;$idle_max;$idle_samples;$idle_ge1;$idle_ge5;$idle_ge10;$idle_ge5_rate;$idle_ge10_rate;$idle_drift;$idle_cv;$idle_min;$idle_max_p999;$idle_mean),
+                  load_25:lat($l25_med;$l25_p9999;$l25_max;$l25_samples;$l25_ge1;$l25_ge5;$l25_ge10;$l25_ge5_rate;$l25_ge10_rate;$l25_drift;$l25_cv;$l25_min;$l25_max_p999;$l25_mean),
+                  load_50:lat($l50_med;$l50_p9999;$l50_max;$l50_samples;$l50_ge1;$l50_ge5;$l50_ge10;$l50_ge5_rate;$l50_ge10_rate;$l50_drift;$l50_cv;$l50_min;$l50_max_p999;$l50_mean),
+                  load_75:lat($l75_med;$l75_p9999;$l75_max;$l75_samples;$l75_ge1;$l75_ge5;$l75_ge10;$l75_ge5_rate;$l75_ge10_rate;$l75_drift;$l75_cv;$l75_min;$l75_max_p999;$l75_mean)
                 },
                 crypto: {
                   x25519:{median:$x_med,cv_percent:$x_cv,min:$x_min,max:$x_max,mean:$x_mean,worst_drop_from_median_percent:$x_drop},
@@ -1248,91 +1189,42 @@ create_debug_json() {
                 disk_diagnostic:{median_ms:$disk_med,cv_percent:$disk_cv,min_ms:$disk_min,max_ms:$disk_max,mean_ms:$disk_mean}
               },
               scores: {
-                latency:$latency_score,
-                crypto_diagnostic:$crypto_score,
-                handshake:$handshake_score,
-                packet_crypto:$packet_score,
-                stream_crypto:$stream_score,
-                system:$system_score,
-                vpn_score:$vpn_score,
-                stability:$stability,
-                tail_quality:$tail_score,
-                consistency:$consistency_score,
+                latency:$latency_score,crypto_diagnostic:$crypto_score,handshake:$handshake_score,packet_crypto:$packet_score,stream_crypto:$stream_score,system:$system_score,vpn_score:$vpn_score,stability:$stability,tail_quality:$tail_score,consistency:$consistency_score,
                 current_subscores: {
-                  latency:{
-                    idle_p99_9:$s_idle,load_p99_9:$s_load,idle_p99_99:$s_idle9999,load_p99_99:$s_load9999,worst:$s_worst,
-                    base:$latency_base,load_ge_5ms:$load_spike5_s,load_ge_10ms:$load_spike10_s,
-                    load_spike_quality:$latency_spike_quality,spike_penalty_points:$latency_spike_penalty
-                  },
-                  crypto:{
-                    x25519:$sx,
-                    aes_gcm_1400_encrypt:$sa1400e,aes_gcm_1400_decrypt:$sa1400d,aes_gcm_16k_encrypt:$sa16k,
-                    chacha20_poly1305_1400_encrypt:$sc1400e,chacha20_poly1305_1400_decrypt:$sc1400d,chacha20_poly1305_16k_encrypt:$sc16k
-                  },
+                  latency:{idle_p99_9:$s_idle,load_25_p99_9:$s_l25,load_50_p99_9:$s_l50,load_75_p99_9:$s_l75,idle_p99_99:$s_idle9999,load_25_p99_99:$s_l25_9999,load_50_p99_99:$s_l50_9999,load_75_p99_99:$s_l75_9999,worst:$s_worst,base:$latency_base,spike_quality:$latency_spike_quality,spike_penalty_points:$latency_spike_penalty,spike_quality_by_load:{load_25:$spike25_quality,load_50:$spike50_quality,load_75:$spike75_quality}},
+                  crypto:{x25519:$sx,aes_gcm_1400_encrypt:$sa1400e,aes_gcm_1400_decrypt:$sa1400d,aes_gcm_16k_encrypt:$sa16k,chacha20_poly1305_1400_encrypt:$sc1400e,chacha20_poly1305_1400_decrypt:$sc1400d,chacha20_poly1305_16k_encrypt:$sc16k},
                   system:{cpu:$scpu,mem:$smem},
-                  tail_quality:{idle_p99_99:$tail_idle_s,load_p99_99:$tail_load_s,idle_ge_5ms:$idle_spike5_s,load_ge_5ms:$load_spike5_s,idle_ge_10ms:$idle_spike10_s,load_ge_10ms:$load_spike10_s,worst:$tail_worst_s},
-                  consistency:{idle_drift:$idle_drift_s,load_drift:$load_drift_s,performance_repeatability:$perf_repeat_s},
+                  tail_quality:{idle_p99_99:$tail_idle_s,load_25_p99_99:$tail_l25_s,load_50_p99_99:$tail_l50_s,load_75_p99_99:$tail_l75_s,idle_ge_5ms:$idle_spike5_s,load_25_ge_5ms:$l25_spike5_s,load_50_ge_5ms:$l50_spike5_s,load_75_ge_5ms:$l75_spike5_s,idle_ge_10ms:$idle_spike10_s,load_25_ge_10ms:$l25_spike10_s,load_50_ge_10ms:$l50_spike10_s,load_75_ge_10ms:$l75_spike10_s,worst:$tail_worst_s},
+                  consistency:{idle_drift:$idle_drift_s,load_25_drift:$l25_drift_s,load_50_drift:$l50_drift_s,load_75_drift:$l75_drift_s,performance_repeatability:$perf_repeat_s},
                   performance_drop:{worst:$worst_perf_drop,worst_metric:$worst_perf_name}
                 }
               },
-              host_diagnostics: {
-                observation_seconds:$diag_duration_s,
-                cpu_steal_percent:$steal_pct,
-                cgroup:{nr_throttled_delta:$cg_nr_throttled,throttled_usec_delta:$cg_throttled_usec}
-              },
+              host_diagnostics:{observation_seconds:$diag_duration_s,cpu_steal_percent:$steal_pct},
               scoring_model: {
-                model_version:"2026-universal-v8",
+                model_version:"2026-universal-v9",
                 score_anchors:[0,45,75,90,100],
-                semantics:{zero:"poor/trash relative to the target VPS class",hundred:"realistic near-term rental ceiling, not a physical maximum"},
-                vpn_score:{
-                  weights:{latency:0.40,cpu:0.30,packet_crypto_1400_bidirectional:0.15,x25519_proxy:0.05,stream_crypto_16k:0.05,mem:0.05},
-                  scope:"universal local VPN host potential; not protocol throughput or route quality"
-                },
-                latency:{
-                  base_weights:{idle_p99_9:0.10,load_p99_9:0.40,idle_p99_99:0.10,load_p99_99:0.35,worst:0.05},
+                semantics:{zero:"poor/trash relative to the target VPS class",hundred:"exceptional but attainable near-term VPS result, not a physical maximum"},
+                vpn_score:{weights:{latency:0.40,cpu:0.30,packet_crypto_1400_bidirectional:0.15,x25519_proxy:0.05,stream_crypto_16k:0.05,mem:0.05},scope:"universal local VPN host potential; not protocol throughput or route quality"},
+                latency: {
+                  profiles:{idle:0,load_25:25,load_50:50,load_75:75},
+                  base_weights:{idle_p99_9:0.05,load_25_p99_9:0.10,load_50_p99_9:0.18,load_75_p99_9:0.22,idle_p99_99:0.05,load_25_p99_99:0.08,load_50_p99_99:0.12,load_75_p99_99:0.15,worst:0.05},
                   formula:"base - spike_penalty_points",
-                  load_spike_guard:{
-                    quality_weights:{ge_5ms:0.65,ge_10ms:0.35},
-                    max_penalty_points:5.0,
-                    penalty_formula:"(100 - load_spike_quality) * 0.05",
-                    lower_is_better_anchors:{ge_5ms_per_million:[10,50,150,500,1000],ge_10ms_per_million:[2,10,30,100,200]}
+                  load_spike_guard:{profile_weights:{load_25:0.15,load_50:0.35,load_75:0.50},within_profile_weights:{ge_5ms:0.65,ge_10ms:0.35},max_penalty_points:6.0,penalty_formula:"(100 - weighted_load_spike_quality) * 0.06"},
+                  lower_is_better_anchors:{
+                    idle_p99_9_us:[180,700,1100,1900,4000],load_25_p99_9_us:[250,900,1500,2500,5200],load_50_p99_9_us:[350,1600,2700,4300,8500],load_75_p99_9_us:[450,1900,3200,5200,10500],
+                    idle_p99_99_us:[450,2000,3500,7000,15000],load_25_p99_99_us:[650,2400,4000,7800,16500],load_50_p99_99_us:[900,3100,5100,9500,20000],load_75_p99_99_us:[1200,3900,6400,12000,25000],
+                    worst_us:[2500,7000,15000,38000,80000]
                   },
-                  lower_is_better_anchors:{
-                    idle_p99_9_us:[200,850,1350,2300,4750],load_p99_9_us:[400,1900,3150,5000,10000],
-                    idle_p99_99_us:[500,2600,4500,9000,19000],load_p99_99_us:[1000,3800,6300,12000,24500],
-                    worst_us:[3000,8500,18000,45000,95000]
+                  spike_rate_anchors_per_million:{
+                    idle_ge_5ms:[2,10,40,150,400],load_25_ge_5ms:[5,20,60,200,500],load_50_ge_5ms:[5,25,80,300,700],load_75_ge_5ms:[10,40,120,400,900],
+                    idle_ge_10ms:[0.5,2,8,25,80],load_25_ge_10ms:[1,5,15,50,120],load_50_ge_10ms:[1,5,20,60,140],load_75_ge_10ms:[2,8,25,80,180]
                   }
                 },
-                performance_higher_is_better_anchors:{
-                  cpu_events_s:[300,500,900,1600,2500],x25519_ops_s:[12000,18000,26000,36000,45000],
-                  aes_gcm_1400_encrypt_B_s:[600000000,1200000000,2200000000,3800000000,5500000000],
-                  aes_gcm_1400_decrypt_B_s:[600000000,1200000000,2200000000,3800000000,5500000000],
-                  aes_gcm_16k_B_s:[1500000000,2500000000,4500000000,8500000000,12000000000],
-                  chacha20_poly1305_1400_encrypt_B_s:[450000000,800000000,1300000000,1900000000,2600000000],
-                  chacha20_poly1305_1400_decrypt_B_s:[450000000,800000000,1300000000,1900000000,2600000000],
-                  chacha20_poly1305_16k_B_s:[900000000,1400000000,2000000000,3200000000,4500000000],
-                  mem_MiB_s:[4096,8192,16384,28672,45056]
-                },
-                crypto_diagnostic:{
-                  weights:{x25519:0.20,packet_crypto:0.50,stream_crypto:0.30},
-                  packet:{aes:0.50,chacha:0.50,directions:{encrypt:0.50,decrypt:0.50}},
-                  stream:{aes:0.50,chacha:0.50,directions:{encrypt:1.00}}
-                },
+                performance_higher_is_better_anchors:{cpu_events_s:[300,500,900,1600,2500],x25519_ops_s:[12000,18000,26000,36000,45000],aes_gcm_1400_encrypt_B_s:[600000000,1200000000,2200000000,3800000000,5500000000],aes_gcm_1400_decrypt_B_s:[600000000,1200000000,2200000000,3800000000,5500000000],aes_gcm_16k_B_s:[1500000000,2500000000,4500000000,8500000000,12000000000],chacha20_poly1305_1400_encrypt_B_s:[450000000,800000000,1300000000,1900000000,2600000000],chacha20_poly1305_1400_decrypt_B_s:[450000000,800000000,1300000000,1900000000,2600000000],chacha20_poly1305_16k_B_s:[900000000,1400000000,2000000000,3200000000,4500000000],mem_MiB_s:[4096,8192,16384,28672,45056]},
+                crypto_diagnostic:{weights:{x25519:0.20,packet_crypto:0.50,stream_crypto:0.30},packet:{aes:0.50,chacha:0.50,directions:{encrypt:0.50,decrypt:0.50}},stream:{aes:0.50,chacha:0.50,directions:{encrypt:1.00}}},
                 system:{weights:{cpu:0.80,mem:0.20,disk:0.00}},
-                tail_quality:{
-                  weights:{idle_p99_99:0.15,load_p99_99:0.35,idle_ge_5ms:0.05,load_ge_5ms:0.15,idle_ge_10ms:0.05,load_ge_10ms:0.20,worst:0.05},
-                  lower_is_better_anchors:{
-                    idle_p99_99_us:[1500,3000,5000,10000,20000],load_p99_99_us:[3000,5000,8000,15000,30000],
-                    idle_ge_5ms_per_million:[2,10,50,200,500],load_ge_5ms_per_million:[10,50,150,500,1000],
-                    idle_ge_10ms_per_million:[0.5,2,10,30,100],load_ge_10ms_per_million:[2,10,30,100,200],
-                    worst_us:[5000,10000,20000,50000,100000]
-                  }
-                },
-                consistency:{
-                  weights:{idle_drift:0.35,load_drift:0.45,performance_repeatability:0.20},
-                  performance_metric_weights:{x25519:0.15,aes_1400_encrypt:0.05,aes_1400_decrypt:0.05,aes_16k_encrypt:0.10,chacha_1400_encrypt:0.05,chacha_1400_decrypt:0.05,chacha_16k_encrypt:0.10,cpu:0.35,mem:0.10},
-                  worst_metric_share:0.20
-                },
+                tail_quality:{weights:{idle_p99_99:0.05,load_25_p99_99:0.08,load_50_p99_99:0.12,load_75_p99_99:0.20,idle_ge_5ms:0.03,load_25_ge_5ms:0.05,load_50_ge_5ms:0.08,load_75_ge_5ms:0.12,idle_ge_10ms:0.02,load_25_ge_10ms:0.04,load_50_ge_10ms:0.07,load_75_ge_10ms:0.09,worst:0.05}},
+                consistency:{weights:{idle_drift:0.10,load_25_drift:0.15,load_50_drift:0.25,load_75_drift:0.30,performance_repeatability:0.20},drift_anchors_us:{idle:[100,250,500,1000,2000],load_25:[125,300,600,1200,2400],load_50:[175,400,800,1600,3200],load_75:[250,550,1100,2200,4400]},performance_metric_weights:{x25519:0.15,aes_1400_encrypt:0.05,aes_1400_decrypt:0.05,aes_16k_encrypt:0.10,chacha_1400_encrypt:0.05,chacha_1400_decrypt:0.05,chacha_16k_encrypt:0.10,cpu:0.35,mem:0.10},worst_metric_share:0.20},
                 stability:{formula:"TAIL * (0.65 + 0.0035 * CONSISTENCY)",scope:"short benchmark window only"},
                 disk:{diagnostic_only:true,score_weight:0.00}
               }
@@ -1372,7 +1264,6 @@ main() {
     setup_cyclic_cmd
     choose_fio_engine
     choose_memory_block
-    collect_udp_quic_diagnostics
 
     local os_name virt model mem_mb load1
     # shellcheck disable=SC1091
@@ -1393,11 +1284,11 @@ main() {
     say "Load1:   $load1"
     [[ "$virt" == "wsl" ]] && say "Scope:   WSL2 is a local single-vCPU reference, not a provider/VPS result"
     say "Plan:    ${ITERATIONS} iterations, ~${PER_ITER_WORK} s measured per iteration (~$((EST_RUNTIME/60)) min $((EST_RUNTIME%60)) s plus preparation)"
-    say "Latency: cyclictest on one vCPU; load = stress-ng ${LOAD_CPU_METHOD}, 50%, ${LOAD_SLICE_MS}ms slice, same vCPU"
+    say "Latency: cyclictest on one vCPU; stress-ng targets 25%, 50%, and 75% CPU, ${LOAD_SLICE_MS}ms slice, same vCPU"
     say "Crypto:  X25519 + AES/ChaCha at 1400 B (enc/dec) and 16 KiB (enc)"
     say "Score:   universal VPN host model"
     say "MEM:     ${MEM_BLOCK_MIB} MiB sequential read working set"
-    say "Order:   idle/load alternates; performance uses paired mirrored rotation; disk last"
+    say "Order:   latency profiles and performance use paired mirrored rotation; disk last"
     say "Network: no external connections during the benchmark phase"
     say "Safety:  single-run lock, signal cleanup, orphan recovery + legacy cleanup"
     say ""
@@ -1410,50 +1301,61 @@ main() {
     fi
     start_host_diagnostics
 
-    local f
-    for f in idle_p999 idle_max idle_gt1 idle_gt5 idle_gt10 \
-             load_p999 load_max load_gt1 load_gt5 load_gt10 \
-             x255 aes1400e aes1400d aes16k cha1400e cha1400d cha16k cpu ram disk; do
+    local latency_modes=(idle load25 load50 load75)
+    local f mode suffix
+    for mode in "${latency_modes[@]}"; do
+        for suffix in p999 max gt1 gt5 gt10; do
+            : >"$TMP_BASE/${mode}_${suffix}.dat"
+        done
+    done
+    for f in x255 aes1400e aes1400d aes16k cha1400e cha1400d cha16k cpu ram disk; do
         : >"$TMP_BASE/$f.dat"
     done
     : >"$TMP_BASE/iterations.tsv"
     : >"$TMP_BASE/cyclic-details.tsv"
 
     local perf_metrics=(x255 aes1400e aes1400d aes16k cha1400e cha1400d cha16k cpu ram)
-    local i task first_mode second_mode offset j idx metric nmetrics
+    local latency_order=()
+    local -A lat_p999=() lat_avg=() lat_max=() lat_gt1=() lat_gt5=() lat_gt10=()
+    local i task perf_offset lat_offset j idx metric nmetrics nlatency
     nmetrics=${#perf_metrics[@]}
-    local idle_p999 idle_max idle_gt1 idle_gt5 idle_gt10 idle_avg
-    local load_p999 load_max load_gt1 load_gt5 load_gt10 load_avg
+    nlatency=${#latency_modes[@]}
     local x255 aes1400e aes1400d aes16k cha1400e cha1400d cha16k cpu ram disk
 
     for ((i=1; i<=ITERATIONS; i++)); do
-        task=1
+        task=0
         x255=""; aes1400e=""; aes1400d=""; aes16k=""; cha1400e=""; cha1400d=""; cha16k=""; cpu=""; ram=""; disk=""
+        lat_p999=(); lat_avg=(); lat_max=(); lat_gt1=(); lat_gt5=(); lat_gt10=(); latency_order=()
 
-        if (( i % 2 == 1 )); then
-            first_mode="idle"; second_mode="load"
-        else
-            first_mode="load"; second_mode="idle"
-        fi
+        # Each odd/even pair uses one rotated latency order and its exact mirror.
+        # Two modes run before performance and two after it, so every pair has the
+        # same mean position for every latency profile.
+        lat_offset=$(( ((i - 1) / 2) % nlatency ))
+        for ((j=0; j<nlatency; j++)); do
+            if (( i % 2 == 1 )); then
+                idx=$(( (j + lat_offset) % nlatency ))
+            else
+                idx=$(( (nlatency - 1 - j + lat_offset) % nlatency ))
+            fi
+            latency_order[$j]="${latency_modes[$idx]}"
+        done
 
-        measure_latency_mode "$first_mode" "$i" "$task"
-        if [[ "$first_mode" == "idle" ]]; then
-            idle_p999="$LAST_LAT_P999"; idle_max="$LAST_LAT_MAX"; idle_gt1="$LAST_LAT_GT1"
-            idle_gt5="$LAST_LAT_GT5"; idle_gt10="$LAST_LAT_GT10"; idle_avg="$LAST_LAT_AVG"
-        else
-            load_p999="$LAST_LAT_P999"; load_max="$LAST_LAT_MAX"; load_gt1="$LAST_LAT_GT1"
-            load_gt5="$LAST_LAT_GT5"; load_gt10="$LAST_LAT_GT10"; load_avg="$LAST_LAT_AVG"
-        fi
+        for ((j=0; j<2; j++)); do
+            mode="${latency_order[$j]}"
+            ((task++))
+            measure_latency_mode "$mode" "$i" "$task"
+            lat_p999[$mode]="$LAST_LAT_P999"; lat_avg[$mode]="$LAST_LAT_AVG"; lat_max[$mode]="$LAST_LAT_MAX"
+            lat_gt1[$mode]="$LAST_LAT_GT1"; lat_gt5[$mode]="$LAST_LAT_GT5"; lat_gt10[$mode]="$LAST_LAT_GT10"
+        done
 
-        # Each odd/even pair uses a rotated order and its exact mirror. Every
-        # metric therefore has mean position 5.0 within a complete pair, avoiding
-        # systematic hot/cold or boost bias while keeping runs reproducible.
-        offset=$(( ((i - 1) / 2) % nmetrics ))
+        # Performance metrics also use paired mirrored rotation, avoiding a fixed
+        # hot/cold or boost advantage for any one metric.
+        perf_offset=$(( ((i - 1) / 2) % nmetrics ))
         for ((j=0; j<nmetrics; j++)); do
             if (( i % 2 == 1 )); then
-                idx=$(( (j + offset) % nmetrics ))
+                idx=$(( (j + perf_offset) % nmetrics ))
             else
-                idx=$(( (nmetrics - 1 - j + offset) % nmetrics ))
+                idx=$(( (nmetrics - 1 - j + perf_offset) % nmetrics ))
             fi
             metric="${perf_metrics[$idx]}"
             ((task++))
@@ -1471,27 +1373,30 @@ main() {
             esac
         done
 
-        ((task++))
-        measure_latency_mode "$second_mode" "$i" "$task"
-        if [[ "$second_mode" == "idle" ]]; then
-            idle_p999="$LAST_LAT_P999"; idle_max="$LAST_LAT_MAX"; idle_gt1="$LAST_LAT_GT1"
-            idle_gt5="$LAST_LAT_GT5"; idle_gt10="$LAST_LAT_GT10"; idle_avg="$LAST_LAT_AVG"
-        else
-            load_p999="$LAST_LAT_P999"; load_max="$LAST_LAT_MAX"; load_gt1="$LAST_LAT_GT1"
-            load_gt5="$LAST_LAT_GT5"; load_gt10="$LAST_LAT_GT10"; load_avg="$LAST_LAT_AVG"
-        fi
+        for ((j=2; j<4; j++)); do
+            mode="${latency_order[$j]}"
+            ((task++))
+            measure_latency_mode "$mode" "$i" "$task"
+            lat_p999[$mode]="$LAST_LAT_P999"; lat_avg[$mode]="$LAST_LAT_AVG"; lat_max[$mode]="$LAST_LAT_MAX"
+            lat_gt1[$mode]="$LAST_LAT_GT1"; lat_gt5[$mode]="$LAST_LAT_GT5"; lat_gt10[$mode]="$LAST_LAT_GT10"
+        done
 
         ((task++))
         run_disk "$i" "$task" "$TMP_BASE/fio-$i.json" "$TMP_BASE/fio-$i.log"
         disk="$LAST_VALUE"
         printf '%s\n' "$disk" >>"$TMP_BASE/disk.dat"
 
-        printf '%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-            "$i" "$idle_p999" "$idle_avg" "$idle_max" "$idle_gt1" "$idle_gt5" "$idle_gt10" \
-            "$load_p999" "$load_avg" "$load_max" "$load_gt1" "$load_gt5" "$load_gt10" >>"$TMP_BASE/cyclic-details.tsv"
+        printf '%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$i" \
+            "${lat_p999[idle]}" "${lat_avg[idle]}" "${lat_max[idle]}" "${lat_gt1[idle]}" "${lat_gt5[idle]}" "${lat_gt10[idle]}" \
+            "${lat_p999[load25]}" "${lat_avg[load25]}" "${lat_max[load25]}" "${lat_gt1[load25]}" "${lat_gt5[load25]}" "${lat_gt10[load25]}" \
+            "${lat_p999[load50]}" "${lat_avg[load50]}" "${lat_max[load50]}" "${lat_gt1[load50]}" "${lat_gt5[load50]}" "${lat_gt10[load50]}" \
+            "${lat_p999[load75]}" "${lat_avg[load75]}" "${lat_max[load75]}" "${lat_gt1[load75]}" "${lat_gt5[load75]}" "${lat_gt10[load75]}" \
+            >>"$TMP_BASE/cyclic-details.tsv"
 
-        printf '%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-            "$i" "$idle_p999" "$load_p999" "$idle_max" "$load_max" \
+        printf '%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$i" "${lat_p999[idle]}" "${lat_p999[load25]}" "${lat_p999[load50]}" "${lat_p999[load75]}" \
+            "${lat_max[idle]}" "${lat_max[load25]}" "${lat_max[load50]}" "${lat_max[load75]}" \
             "$x255" "$aes1400e" "$aes1400d" "$aes16k" "$cha1400e" "$cha1400d" "$cha16k" "$cpu" "$ram" "$disk" \
             >>"$TMP_BASE/iterations.tsv"
 
@@ -1508,7 +1413,10 @@ main() {
     progress_finish
     say ""
 
-    local idle_med idle_cv idle_min idle_worst idle_mean load_med load_cv load_min load_worst load_mean
+    local idle_med idle_cv idle_min idle_worst idle_mean
+    local load25_med load25_cv load25_min load25_worst load25_mean
+    local load50_med load50_cv load50_min load50_worst load50_mean
+    local load75_med load75_cv load75_min load75_worst load75_mean
     local x_med x_cv x_min x_max x_mean
     local aes1400e_med aes1400e_cv aes1400e_min aes1400e_max aes1400e_mean
     local aes1400d_med aes1400d_cv aes1400d_min aes1400d_max aes1400d_mean
@@ -1519,7 +1427,9 @@ main() {
     local cpu_med cpu_cv cpu_min cpu_max cpu_mean ram_med ram_cv ram_min ram_max ram_mean
     local disk_med disk_cv disk_min disk_max disk_mean
     read -r idle_med idle_cv idle_min idle_worst idle_mean < <(calc_stats "$TMP_BASE/idle_p999.dat")
-    read -r load_med load_cv load_min load_worst load_mean < <(calc_stats "$TMP_BASE/load_p999.dat")
+    read -r load25_med load25_cv load25_min load25_worst load25_mean < <(calc_stats "$TMP_BASE/load25_p999.dat")
+    read -r load50_med load50_cv load50_min load50_worst load50_mean < <(calc_stats "$TMP_BASE/load50_p999.dat")
+    read -r load75_med load75_cv load75_min load75_worst load75_mean < <(calc_stats "$TMP_BASE/load75_p999.dat")
     read -r x_med x_cv x_min x_max x_mean < <(calc_stats "$TMP_BASE/x255.dat")
     read -r aes1400e_med aes1400e_cv aes1400e_min aes1400e_max aes1400e_mean < <(calc_stats "$TMP_BASE/aes1400e.dat")
     read -r aes1400d_med aes1400d_cv aes1400d_min aes1400d_max aes1400d_mean < <(calc_stats "$TMP_BASE/aes1400d.dat")
@@ -1531,17 +1441,23 @@ main() {
     read -r ram_med ram_cv ram_min ram_max ram_mean < <(calc_stats "$TMP_BASE/ram.dat")
     read -r disk_med disk_cv disk_min disk_max disk_mean < <(calc_stats "$TMP_BASE/disk.dat")
 
-    # Aggregate all cyclictest histograms. p99.99 is computed from the combined
-    # distribution, not as a median of per-iteration percentiles.
+    # Aggregate each latency profile independently. With the default 35-second
+    # duration and six iterations, every profile contributes about 210k samples.
     local idle_p9999 idle_max_all idle_gt1_count idle_gt5_count idle_gt10_count idle_samples
-    local load_p9999 load_max_all load_gt1_count load_gt5_count load_gt10_count load_samples
+    local load25_p9999 load25_max_all load25_gt1_count load25_gt5_count load25_gt10_count load25_samples
+    local load50_p9999 load50_max_all load50_gt1_count load50_gt5_count load50_gt10_count load50_samples
+    local load75_p9999 load75_max_all load75_gt1_count load75_gt5_count load75_gt10_count load75_samples
     read -r idle_p9999 idle_max_all idle_gt1_count idle_gt5_count idle_gt10_count idle_samples \
         < <(aggregate_cyclic_hists "$TMP_BASE"/cyclic-idle-*.hist)
-    read -r load_p9999 load_max_all load_gt1_count load_gt5_count load_gt10_count load_samples \
-        < <(aggregate_cyclic_hists "$TMP_BASE"/cyclic-load-*.hist)
+    read -r load25_p9999 load25_max_all load25_gt1_count load25_gt5_count load25_gt10_count load25_samples \
+        < <(aggregate_cyclic_hists "$TMP_BASE"/cyclic-load25-*.hist)
+    read -r load50_p9999 load50_max_all load50_gt1_count load50_gt5_count load50_gt10_count load50_samples \
+        < <(aggregate_cyclic_hists "$TMP_BASE"/cyclic-load50-*.hist)
+    read -r load75_p9999 load75_max_all load75_gt1_count load75_gt5_count load75_gt10_count load75_samples \
+        < <(aggregate_cyclic_hists "$TMP_BASE"/cyclic-load75-*.hist)
 
     local worst_all
-    worst_all="$(awk -v a="$idle_max_all" -v b="$load_max_all" 'BEGIN{print (a>b?a:b)}')"
+    worst_all="$(awk -v a="$idle_max_all" -v b="$load25_max_all" -v c="$load50_max_all" -v d="$load75_max_all" 'BEGIN{m=a;if(b>m)m=b;if(c>m)m=c;if(d>m)m=d;print m}')"
 
     local latency_comparable latency_compat_reason
     latency_comparable=0
@@ -1554,43 +1470,53 @@ main() {
         latency_compat_reason="single-vCPU affinity unavailable"
     fi
 
-    # Keep idle/load spike denominators separate. Combining them would make
-    # load-only problems look roughly twice as rare when idle is clean.
-    local idle_gt5_rate load_gt5_rate idle_gt10_rate load_gt10_rate
+    local idle_gt5_rate load25_gt5_rate load50_gt5_rate load75_gt5_rate
+    local idle_gt10_rate load25_gt10_rate load50_gt10_rate load75_gt10_rate
     idle_gt5_rate="$(awk -v c="$idle_gt5_count" -v n="$idle_samples" 'BEGIN{printf "%.3f",n?c*1000000/n:0}')"
-    load_gt5_rate="$(awk -v c="$load_gt5_count" -v n="$load_samples" 'BEGIN{printf "%.3f",n?c*1000000/n:0}')"
+    load25_gt5_rate="$(awk -v c="$load25_gt5_count" -v n="$load25_samples" 'BEGIN{printf "%.3f",n?c*1000000/n:0}')"
+    load50_gt5_rate="$(awk -v c="$load50_gt5_count" -v n="$load50_samples" 'BEGIN{printf "%.3f",n?c*1000000/n:0}')"
+    load75_gt5_rate="$(awk -v c="$load75_gt5_count" -v n="$load75_samples" 'BEGIN{printf "%.3f",n?c*1000000/n:0}')"
     idle_gt10_rate="$(awk -v c="$idle_gt10_count" -v n="$idle_samples" 'BEGIN{printf "%.3f",n?c*1000000/n:0}')"
-    load_gt10_rate="$(awk -v c="$load_gt10_count" -v n="$load_samples" 'BEGIN{printf "%.3f",n?c*1000000/n:0}')"
+    load25_gt10_rate="$(awk -v c="$load25_gt10_count" -v n="$load25_samples" 'BEGIN{printf "%.3f",n?c*1000000/n:0}')"
+    load50_gt10_rate="$(awk -v c="$load50_gt10_count" -v n="$load50_samples" 'BEGIN{printf "%.3f",n?c*1000000/n:0}')"
+    load75_gt10_rate="$(awk -v c="$load75_gt10_count" -v n="$load75_samples" 'BEGIN{printf "%.3f",n?c*1000000/n:0}')"
 
-    local tail_idle_s tail_load_s idle_spike5_s load_spike5_s idle_spike10_s load_spike10_s
-    local tail_worst_s tail_f tail_score
-    tail_idle_s="$(vpn_lower_score "$idle_p9999" 1500 3000 5000 10000 20000)"
-    tail_load_s="$(vpn_lower_score "$load_p9999" 3000 5000 8000 15000 30000)"
-    idle_spike5_s="$(vpn_lower_score "$idle_gt5_rate" 2 10 50 200 500)"
-    load_spike5_s="$(vpn_lower_score "$load_gt5_rate" 10 50 150 500 1000)"
-    idle_spike10_s="$(vpn_lower_score "$idle_gt10_rate" 0.5 2 10 30 100)"
-    load_spike10_s="$(vpn_lower_score "$load_gt10_rate" 2 10 30 100 200)"
-    tail_worst_s="$(vpn_lower_score "$worst_all" 5000 10000 20000 50000 100000)"
-
-    # LATENCY is intentionally stricter under CPU load. The base score gives 75%
-    # of its weight to loaded p99.9/p99.99. The 100 anchors reserve the top grade for
-    # exceptional sub-millisecond hosts; moderately tighter 90/75/45/0 anchors spread
-    # modern VPS results without making a clean, non-exceptional host look unusable.
-    # A one-way guard can additionally subtract up to five points for frequent loaded
-    # spikes. Absolute worst remains only 5% because it is one sample.
-    local s_idle s_load s_idle9999 s_load9999 s_worst
+    # Strict multi-load latency model. All previous idle/50% anchors are tightened,
+    # while 25% and 75% profiles expose how quickly scheduler latency degrades as
+    # one vCPU approaches saturation.
+    local s_idle s_load25 s_load50 s_load75 s_idle9999 s_load25_9999 s_load50_9999 s_load75_9999 s_worst
     local latency_base_f latency_spike_quality latency_spike_penalty latency_f latency_score
-    s_idle="$(vpn_lower_score "$idle_med" 200 850 1350 2300 4750)"
-    s_load="$(vpn_lower_score "$load_med" 400 1900 3150 5000 10000)"
-    s_idle9999="$(vpn_lower_score "$idle_p9999" 500 2600 4500 9000 19000)"
-    s_load9999="$(vpn_lower_score "$load_p9999" 1000 3800 6300 12000 24500)"
-    s_worst="$(vpn_lower_score "$worst_all" 3000 8500 18000 45000 95000)"
-    latency_base_f="$(awk -v a="$s_idle" -v b="$s_load" -v c="$s_idle9999" -v d="$s_load9999" -v e="$s_worst" \
-        'BEGIN{printf "%.3f",a*.10+b*.40+c*.10+d*.35+e*.05}')"
-    latency_spike_quality="$(awk -v s5="$load_spike5_s" -v s10="$load_spike10_s" \
-        'BEGIN{printf "%.3f",s5*.65+s10*.35}')"
+    s_idle="$(vpn_lower_score "$idle_med" 180 700 1100 1900 4000)"
+    s_load25="$(vpn_lower_score "$load25_med" 250 900 1500 2500 5200)"
+    s_load50="$(vpn_lower_score "$load50_med" 350 1600 2700 4300 8500)"
+    s_load75="$(vpn_lower_score "$load75_med" 450 1900 3200 5200 10500)"
+    s_idle9999="$(vpn_lower_score "$idle_p9999" 450 2000 3500 7000 15000)"
+    s_load25_9999="$(vpn_lower_score "$load25_p9999" 650 2400 4000 7800 16500)"
+    s_load50_9999="$(vpn_lower_score "$load50_p9999" 900 3100 5100 9500 20000)"
+    s_load75_9999="$(vpn_lower_score "$load75_p9999" 1200 3900 6400 12000 25000)"
+    s_worst="$(vpn_lower_score "$worst_all" 2500 7000 15000 38000 80000)"
+    latency_base_f="$(awk -v i="$s_idle" -v l25="$s_load25" -v l50="$s_load50" -v l75="$s_load75" \
+        -v it="$s_idle9999" -v t25="$s_load25_9999" -v t50="$s_load50_9999" -v t75="$s_load75_9999" -v w="$s_worst" \
+        'BEGIN{printf "%.3f",i*.05+l25*.10+l50*.18+l75*.22+it*.05+t25*.08+t50*.12+t75*.15+w*.05}')"
+
+    local idle_spike5_s load25_spike5_s load50_spike5_s load75_spike5_s
+    local idle_spike10_s load25_spike10_s load50_spike10_s load75_spike10_s
+    local spike25_quality spike50_quality spike75_quality
+    idle_spike5_s="$(vpn_lower_score "$idle_gt5_rate" 2 10 40 150 400)"
+    load25_spike5_s="$(vpn_lower_score "$load25_gt5_rate" 5 20 60 200 500)"
+    load50_spike5_s="$(vpn_lower_score "$load50_gt5_rate" 5 25 80 300 700)"
+    load75_spike5_s="$(vpn_lower_score "$load75_gt5_rate" 10 40 120 400 900)"
+    idle_spike10_s="$(vpn_lower_score "$idle_gt10_rate" 0.5 2 8 25 80)"
+    load25_spike10_s="$(vpn_lower_score "$load25_gt10_rate" 1 5 15 50 120)"
+    load50_spike10_s="$(vpn_lower_score "$load50_gt10_rate" 1 5 20 60 140)"
+    load75_spike10_s="$(vpn_lower_score "$load75_gt10_rate" 2 8 25 80 180)"
+    spike25_quality="$(awk -v s5="$load25_spike5_s" -v s10="$load25_spike10_s" 'BEGIN{printf "%.3f",s5*.65+s10*.35}')"
+    spike50_quality="$(awk -v s5="$load50_spike5_s" -v s10="$load50_spike10_s" 'BEGIN{printf "%.3f",s5*.65+s10*.35}')"
+    spike75_quality="$(awk -v s5="$load75_spike5_s" -v s10="$load75_spike10_s" 'BEGIN{printf "%.3f",s5*.65+s10*.35}')"
+    latency_spike_quality="$(awk -v q25="$spike25_quality" -v q50="$spike50_quality" -v q75="$spike75_quality" \
+        'BEGIN{printf "%.3f",q25*.15+q50*.35+q75*.50}')"
     latency_spike_penalty="$(awk -v q="$latency_spike_quality" 'BEGIN {
-        p=(100-q)*.05; if(p<0)p=0; if(p>5)p=5; printf "%.3f",p
+        p=(100-q)*.06; if(p<0)p=0; if(p>6)p=6; printf "%.3f",p
     }')"
     latency_f="$(awk -v b="$latency_base_f" -v p="$latency_spike_penalty" 'BEGIN {
         s=b-p; if(s<0)s=0; if(s>100)s=100; printf "%.2f",s
@@ -1601,24 +1527,36 @@ main() {
         latency_score="null"
     fi
 
-    tail_f="$(awk -v i="$tail_idle_s" -v l="$tail_load_s" -v i5="$idle_spike5_s" -v l5="$load_spike5_s" \
-        -v i10="$idle_spike10_s" -v l10="$load_spike10_s" -v w="$tail_worst_s" \
-        'BEGIN{printf "%.2f",i*.15+l*.35+i5*.05+l5*.15+i10*.05+l10*.20+w*.05}')"
+    local tail_idle_s tail_load25_s tail_load50_s tail_load75_s tail_worst_s tail_f tail_score
+    tail_idle_s="$(vpn_lower_score "$idle_p9999" 450 2000 3500 7000 15000)"
+    tail_load25_s="$(vpn_lower_score "$load25_p9999" 650 2400 4000 7800 16500)"
+    tail_load50_s="$(vpn_lower_score "$load50_p9999" 900 3100 5100 9500 20000)"
+    tail_load75_s="$(vpn_lower_score "$load75_p9999" 1200 3900 6400 12000 25000)"
+    tail_worst_s="$(vpn_lower_score "$worst_all" 2500 7000 15000 38000 80000)"
+    tail_f="$(awk -v i="$tail_idle_s" -v l25="$tail_load25_s" -v l50="$tail_load50_s" -v l75="$tail_load75_s" \
+        -v i5="$idle_spike5_s" -v a5="$load25_spike5_s" -v b5="$load50_spike5_s" -v c5="$load75_spike5_s" \
+        -v i10="$idle_spike10_s" -v a10="$load25_spike10_s" -v b10="$load50_spike10_s" -v c10="$load75_spike10_s" -v w="$tail_worst_s" \
+        'BEGIN{printf "%.2f",i*.05+l25*.08+l50*.12+l75*.20+i5*.03+a5*.05+b5*.08+c5*.12+i10*.02+a10*.04+b10*.07+c10*.09+w*.05}')"
     if (( latency_comparable == 1 )); then
         tail_score="$(awk -v v="$tail_f" 'BEGIN{printf "%d",v+0.5}')"
     else
         tail_score="null"
     fi
 
-    local idle_drift_us load_drift_us idle_drift_s load_drift_s
+    local idle_drift_us load25_drift_us load50_drift_us load75_drift_us
+    local idle_drift_s load25_drift_s load50_drift_s load75_drift_s
     local x_drop aes1400e_drop aes1400d_drop aes16k_drop cha1400e_drop cha1400d_drop cha16k_drop cpu_drop mem_drop
     local x_drop_s aes1400e_drop_s aes1400d_drop_s aes16k_drop_s cha1400e_drop_s cha1400d_drop_s cha16k_drop_s cpu_drop_s mem_drop_s
     local perf_base_s perf_worst_s perf_repeat_s worst_perf_drop worst_perf_name
     local consistency_f consistency_score stab_f stab
     idle_drift_us="$(drift_from_median "$idle_med" "$idle_min" "$idle_worst")"
-    load_drift_us="$(drift_from_median "$load_med" "$load_min" "$load_worst")"
-    idle_drift_s="$(vpn_lower_score "$idle_drift_us" 150 300 600 1200 2400)"
-    load_drift_s="$(vpn_lower_score "$load_drift_us" 250 500 1000 2000 4000)"
+    load25_drift_us="$(drift_from_median "$load25_med" "$load25_min" "$load25_worst")"
+    load50_drift_us="$(drift_from_median "$load50_med" "$load50_min" "$load50_worst")"
+    load75_drift_us="$(drift_from_median "$load75_med" "$load75_min" "$load75_worst")"
+    idle_drift_s="$(vpn_lower_score "$idle_drift_us" 100 250 500 1000 2000)"
+    load25_drift_s="$(vpn_lower_score "$load25_drift_us" 125 300 600 1200 2400)"
+    load50_drift_s="$(vpn_lower_score "$load50_drift_us" 175 400 800 1600 3200)"
+    load75_drift_s="$(vpn_lower_score "$load75_drift_us" 250 550 1100 2200 4400)"
 
     x_drop="$(drop_from_median "$x_med" "$x_min")"
     aes1400e_drop="$(drop_from_median "$aes1400e_med" "$aes1400e_min")"
@@ -1653,8 +1591,8 @@ main() {
     perf_worst_s="$(vpn_lower_score "$worst_perf_drop" 3 7 12 20 35)"
     perf_repeat_s="$(awk -v b="$perf_base_s" -v w="$perf_worst_s" 'BEGIN{printf "%.2f",b*.80+w*.20}')"
 
-    consistency_f="$(awk -v i="$idle_drift_s" -v l="$load_drift_s" -v p="$perf_repeat_s" \
-        'BEGIN{printf "%.2f",i*.35+l*.45+p*.20}')"
+    consistency_f="$(awk -v i="$idle_drift_s" -v l25="$load25_drift_s" -v l50="$load50_drift_s" -v l75="$load75_drift_s" -v p="$perf_repeat_s" \
+        'BEGIN{printf "%.2f",i*.10+l25*.15+l50*.25+l75*.30+p*.20}')"
     if (( latency_comparable == 1 )); then
         consistency_score="$(awk -v v="$consistency_f" 'BEGIN{printf "%d",v+0.5}')"
         stab_f="$(awk -v t="$tail_f" -v c="$consistency_f" 'BEGIN{printf "%.2f",t*(.65+.0035*c)}')"
@@ -1702,9 +1640,8 @@ main() {
         vpn_f="null"; vpn_score="null"
     fi
 
-    # Cheap diagnostics for quota/oversell symptoms during the same short run.
+    # CPU steal observed on the benchmark vCPU during this short run.
     local diag_end_epoch diag_duration_s cpu_total_end cpu_steal_end cpu_total_delta cpu_steal_delta steal_pct
-    local cg_nr_throttled_end cg_throttled_usec_end cg_nr_throttled_delta cg_throttled_usec_delta
     local end_vals
     diag_end_epoch="$(date +%s)"
     diag_duration_s=$(( diag_end_epoch - DIAG_START_EPOCH ))
@@ -1713,16 +1650,6 @@ main() {
     cpu_total_delta=$(( cpu_total_end - CPU_TOTAL_START ))
     cpu_steal_delta=$(( cpu_steal_end - CPU_STEAL_START ))
     steal_pct="$(awk -v s="$cpu_steal_delta" -v t="$cpu_total_delta" 'BEGIN{printf "%.3f", (t>0 ? s*100/t : 0)}')"
-    cg_nr_throttled_delta=0
-    cg_throttled_usec_delta=0
-    if [[ -n "$CGROUP_CPU_STAT" && -r "$CGROUP_CPU_STAT" ]]; then
-        cg_nr_throttled_end="$(read_cgroup_value nr_throttled "$CGROUP_CPU_STAT")"
-        cg_throttled_usec_end="$(read_cgroup_value throttled_usec "$CGROUP_CPU_STAT")"
-        cg_nr_throttled_delta=$(( cg_nr_throttled_end - CG_NR_THROTTLED_START ))
-        cg_throttled_usec_delta=$(( cg_throttled_usec_end - CG_THROTTLED_USEC_START ))
-        (( cg_nr_throttled_delta < 0 )) && cg_nr_throttled_delta=0
-        (( cg_throttled_usec_delta < 0 )) && cg_throttled_usec_delta=0
-    fi
 
     local cpu_score mem_score
     cpu_score="$(awk -v v="$scpu" 'BEGIN{printf "%d",v+0.5}')"
@@ -1735,18 +1662,27 @@ main() {
     else
         printf '%sLATENCY%s  N/A  %s(%s)%s\n' "$BOLD" "$RESET" "$RED" "$latency_compat_reason" "$RESET"
     fi
-    printf '  %-20s %s\n' "idle p99.9" "$(fmt_latency_us "$idle_med")"
-    printf '  %-20s %s\n' "idle p99.99" "$(fmt_latency_us "$idle_p9999")"
-    printf '  %-20s %s\n' "load p99.9" "$(fmt_latency_us "$load_med")"
-    printf '  %-20s %s\n' "load p99.99" "$(fmt_latency_us "$load_p9999")"
+    printf '  %-10s p99.9 %-9s | p99.99 %-9s | drift %s\n' "idle" \
+        "$(fmt_latency_us "$idle_med")" "$(fmt_latency_us "$idle_p9999")" "$(fmt_latency_us "$idle_drift_us")"
+    printf '  %-10s p99.9 %-9s | p99.99 %-9s | drift %s\n' "load 25%" \
+        "$(fmt_latency_us "$load25_med")" "$(fmt_latency_us "$load25_p9999")" "$(fmt_latency_us "$load25_drift_us")"
+    printf '  %-10s p99.9 %-9s | p99.99 %-9s | drift %s\n' "load 50%" \
+        "$(fmt_latency_us "$load50_med")" "$(fmt_latency_us "$load50_p9999")" "$(fmt_latency_us "$load50_drift_us")"
+    printf '  %-10s p99.9 %-9s | p99.99 %-9s | drift %s\n' "load 75%" \
+        "$(fmt_latency_us "$load75_med")" "$(fmt_latency_us "$load75_p9999")" "$(fmt_latency_us "$load75_drift_us")"
     printf '  %-20s %s\n' "worst" "$(fmt_latency_us "$worst_all")"
-    printf '  %-20s idle %s | load %s\n' "drift" "$(fmt_latency_us "$idle_drift_us")" "$(fmt_latency_us "$load_drift_us")"
-    printf '  %-20s idle %s (%s per million) | load %s (%s per million)\n' "spikes >=5ms" \
+    printf '  %-20s idle %s (%s ppm) | 25%% %s (%s ppm)\n' "spikes >=5ms" \
         "$idle_gt5_count" "$(awk -v v="$idle_gt5_rate" 'BEGIN{printf "%.1f",v}')" \
-        "$load_gt5_count" "$(awk -v v="$load_gt5_rate" 'BEGIN{printf "%.1f",v}')"
-    printf '  %-20s idle %s (%s per million) | load %s (%s per million)\n' "spikes >=10ms" \
+        "$load25_gt5_count" "$(awk -v v="$load25_gt5_rate" 'BEGIN{printf "%.1f",v}')"
+    printf '  %-20s 50%%  %s (%s ppm) | 75%% %s (%s ppm)\n' "" \
+        "$load50_gt5_count" "$(awk -v v="$load50_gt5_rate" 'BEGIN{printf "%.1f",v}')" \
+        "$load75_gt5_count" "$(awk -v v="$load75_gt5_rate" 'BEGIN{printf "%.1f",v}')"
+    printf '  %-20s idle %s (%s ppm) | 25%% %s (%s ppm)\n' "spikes >=10ms" \
         "$idle_gt10_count" "$(awk -v v="$idle_gt10_rate" 'BEGIN{printf "%.1f",v}')" \
-        "$load_gt10_count" "$(awk -v v="$load_gt10_rate" 'BEGIN{printf "%.1f",v}')"
+        "$load25_gt10_count" "$(awk -v v="$load25_gt10_rate" 'BEGIN{printf "%.1f",v}')"
+    printf '  %-20s 50%%  %s (%s ppm) | 75%% %s (%s ppm)\n' "" \
+        "$load50_gt10_count" "$(awk -v v="$load50_gt10_rate" 'BEGIN{printf "%.1f",v}')" \
+        "$load75_gt10_count" "$(awk -v v="$load75_gt10_rate" 'BEGIN{printf "%.1f",v}')"
 
     say ""
     printf '%sCRYPTO%s  ' "$BOLD" "$RESET"
@@ -1792,7 +1728,7 @@ main() {
         printf '  %-20s ' "consistency"
         color_score "$consistency_score"
         printf '\n'
-        printf '  %-20s idle %s | load %s\n' "latency drift" "$(fmt_latency_us "$idle_drift_us")" "$(fmt_latency_us "$load_drift_us")"
+        printf '  %-20s idle %s | 25%% %s | 50%% %s | 75%% %s\n' "latency drift" "$(fmt_latency_us "$idle_drift_us")" "$(fmt_latency_us "$load25_drift_us")" "$(fmt_latency_us "$load50_drift_us")" "$(fmt_latency_us "$load75_drift_us")"
         printf '  %-20s %s (%s)\n' "worst perf loss" "$worst_perf_name" "$(fmt_percent "$worst_perf_drop")"
     else
         printf '%sSTABILITY%s  N/A  %s(latency mode is not comparable)%s\n' "$BOLD" "$RESET" "$RED" "$RESET"
@@ -1802,26 +1738,7 @@ main() {
     say ""
     say "${BOLD}HOST DIAGNOSTICS${RESET}"
     printf '  %-20s %s\n' "disk p99.9" "$(fmt_latency_ms "$disk_med")"
-    printf '  %-20s %s\n' "QUIC UDP RX max" "$(fmt_bytes_binary "$UDP_RMEM_MAX")"
-    printf '  %-20s %s\n' "QUIC UDP TX max" "$(fmt_bytes_binary "$UDP_WMEM_MAX")"
-    printf '  %-20s %s\n' "QUIC UDP target" "$(fmt_bytes_binary "$HYSTERIA2_UDP_RECOMMENDED_BYTES")"
-    case "$UDP_BUFFER_STATUS" in
-        ready)
-            printf '  %-20s ready\n' "QUIC UDP state"
-            ;;
-        below-recommendation)
-            printf '  %-20s below target\n' "QUIC UDP state"
-            ;;
-        *)
-            printf '  %-20s N/A\n' "QUIC UDP state"
-            ;;
-    esac
     printf '  %-20s %s%% over %s s\n' "CPU steal" "$(awk -v v="$steal_pct" 'BEGIN{printf "%.2f",v}')" "$diag_duration_s"
-    if [[ -n "$CGROUP_CPU_STAT" ]]; then
-        printf '  %-20s %s in %s events\n' "cgroup throttle" "$(fmt_duration_us "$cg_throttled_usec_delta")" "$cg_nr_throttled_delta"
-    else
-        printf '  %-20s N/A\n' "cgroup throttle"
-    fi
 
     say ""
     say "${BOLD}RESULT${RESET}"
@@ -1838,11 +1755,12 @@ main() {
 
     say ""
     say "${DIM}Percentages in parentheses show the worst iteration loss from the median.${RESET}"
+    say "${DIM}ppm in LATENCY means spike events per million cyclictest samples for that profile.${RESET}"
     say "${DIM}STABILITY covers this benchmark run only; rare hourly or daily events are outside its scope.${RESET}"
     say "${DIM}VPN SCORE estimates local host potential, not protocol throughput or network-route quality.${RESET}"
     say "${DIM}VPN SCORE is 40% LATENCY, 30% CPU, 15% bidirectional packet crypto, 5% X25519, 5% stream crypto, and 5% MEM.${RESET}"
-    say "${DIM}LATENCY uses a strict 2026 VPS scale, reserves 100 for exceptional sub-millisecond tails, and penalizes frequent loaded spikes.${RESET}"
-    say "${DIM}Route RTT/loss, MTU, NIC/GSO, and Salamander/Gecko overhead are not measured.${RESET}"
+    say "${DIM}LATENCY combines idle plus 25%, 50%, and 75% one-vCPU load profiles; 100 requires exceptional sub-millisecond behavior.${RESET}"
+    say "${DIM}Route RTT/loss, MTU, NIC offload, and protocol-specific overhead are not measured.${RESET}"
     say "${DIM}CRYPTO uses a piecewise-linear 2026 VPS grade. SYSTEM is 80% CPU and 20% MEM. Disk is diagnostic only.${RESET}"
 }
 

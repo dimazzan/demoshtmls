@@ -8,7 +8,7 @@ export LC_ALL=C
 export LANG=C
 umask 077
 
-SCRIPT_VERSION="2.3.0"
+SCRIPT_VERSION="2.4.0"
 ITERATIONS="${VPSBENCH_ITERATIONS:-6}"
 CYCLIC_SEC="${VPSBENCH_CYCLIC_SEC:-45}"
 CRYPTO_SEC="${VPSBENCH_CRYPTO_SEC:-5}"
@@ -1070,7 +1070,7 @@ create_debug_json() {
     if (( CYCLIC_NATURAL_PM == 1 && SINGLE_CORE_COMPARABLE == 1 )); then latency_ready_json=true; else latency_ready_json=false; fi
 
     jq -n \
-        --arg schema "6" \
+        --arg schema "7" \
         --arg version "$SCRIPT_VERSION" \
         --arg state "$state" \
         --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -1209,7 +1209,8 @@ create_debug_json() {
             --argjson cpu_med "$cpu_med" --argjson cpu_cv "$cpu_cv" --argjson cpu_min "$cpu_min" --argjson cpu_max "$cpu_max" --argjson cpu_mean "$cpu_mean" --argjson cpu_drop "$cpu_drop" \
             --argjson mem_med "$ram_med" --argjson mem_cv "$ram_cv" --argjson mem_min "$ram_min" --argjson mem_max "$ram_max" --argjson mem_mean "$ram_mean" --argjson mem_drop "$mem_drop" \
             --argjson disk_med "$disk_med" --argjson disk_cv "$disk_cv" --argjson disk_min "$disk_min" --argjson disk_max "$disk_max" --argjson disk_mean "$disk_mean" \
-            --argjson latency_score "$latency_score" --argjson crypto_score "$crypto_score" --argjson handshake_score "$handshake_score" --argjson packet_score "$packet_score" --argjson stream_score "$stream_score" \
+            --argjson latency_score "$latency_score" --argjson latency_base "$latency_base_f" --argjson latency_spike_quality "$latency_spike_quality" --argjson latency_spike_penalty "$latency_spike_penalty" \
+            --argjson crypto_score "$crypto_score" --argjson handshake_score "$handshake_score" --argjson packet_score "$packet_score" --argjson stream_score "$stream_score" \
             --argjson system_score "$system_score" --argjson vpn_score "$vpn_score" --argjson stability "$stab" \
             --argjson tail_score "$tail_score" --argjson consistency_score "$consistency_score" \
             --argjson s_idle "$s_idle" --argjson s_load "$s_load" --argjson s_idle9999 "$s_idle9999" --argjson s_load9999 "$s_load9999" --argjson s_worst "$s_worst" \
@@ -1258,7 +1259,11 @@ create_debug_json() {
                 tail_quality:$tail_score,
                 consistency:$consistency_score,
                 current_subscores: {
-                  latency:{idle_p99_9:$s_idle,load_p99_9:$s_load,idle_p99_99:$s_idle9999,load_p99_99:$s_load9999,worst:$s_worst},
+                  latency:{
+                    idle_p99_9:$s_idle,load_p99_9:$s_load,idle_p99_99:$s_idle9999,load_p99_99:$s_load9999,worst:$s_worst,
+                    base:$latency_base,load_ge_5ms:$load_spike5_s,load_ge_10ms:$load_spike10_s,
+                    load_spike_quality:$latency_spike_quality,spike_penalty_points:$latency_spike_penalty
+                  },
                   crypto:{
                     x25519:$sx,
                     aes_gcm_1400_encrypt:$sa1400e,aes_gcm_1400_decrypt:$sa1400d,aes_gcm_16k_encrypt:$sa16k,
@@ -1276,7 +1281,7 @@ create_debug_json() {
                 cgroup:{nr_throttled_delta:$cg_nr_throttled,throttled_usec_delta:$cg_throttled_usec}
               },
               scoring_model: {
-                model_version:"2026-universal-v5",
+                model_version:"2026-universal-v6",
                 score_anchors:[0,45,75,90,100],
                 semantics:{zero:"poor/trash relative to the target VPS class",hundred:"realistic near-term rental ceiling, not a physical maximum"},
                 vpn_score:{
@@ -1284,10 +1289,17 @@ create_debug_json() {
                   scope:"universal local VPN host potential; not protocol throughput or route quality"
                 },
                 latency:{
-                  weights:{idle_p99_9:0.15,load_p99_9:0.40,idle_p99_99:0.10,load_p99_99:0.30,worst:0.05},
+                  base_weights:{idle_p99_9:0.10,load_p99_9:0.40,idle_p99_99:0.10,load_p99_99:0.35,worst:0.05},
+                  formula:"base - spike_penalty_points",
+                  load_spike_guard:{
+                    quality_weights:{ge_5ms:0.65,ge_10ms:0.35},
+                    max_penalty_points:5.0,
+                    penalty_formula:"(100 - load_spike_quality) * 0.05",
+                    lower_is_better_anchors:{ge_5ms_per_million:[10,50,150,500,1000],ge_10ms_per_million:[2,10,30,100,200]}
+                  },
                   lower_is_better_anchors:{
-                    idle_p99_9_us:[500,1000,1500,2500,5000],load_p99_9_us:[1500,2500,4000,6000,12000],
-                    idle_p99_99_us:[1500,3000,5000,10000,20000],load_p99_99_us:[3000,5000,8000,15000,30000],
+                    idle_p99_9_us:[500,1000,1500,2500,5000],load_p99_9_us:[1250,2250,3500,5500,10500],
+                    idle_p99_99_us:[1500,3000,5000,10000,20000],load_p99_99_us:[2500,4500,7000,13000,26000],
                     worst_us:[5000,10000,20000,50000,100000]
                   }
                 },
@@ -1310,8 +1322,10 @@ create_debug_json() {
                 tail_quality:{
                   weights:{idle_p99_99:0.15,load_p99_99:0.35,idle_ge_5ms:0.05,load_ge_5ms:0.15,idle_ge_10ms:0.05,load_ge_10ms:0.20,worst:0.05},
                   lower_is_better_anchors:{
+                    idle_p99_99_us:[1500,3000,5000,10000,20000],load_p99_99_us:[3000,5000,8000,15000,30000],
                     idle_ge_5ms_per_million:[2,10,50,200,500],load_ge_5ms_per_million:[10,50,150,500,1000],
-                    idle_ge_10ms_per_million:[0.5,2,10,30,100],load_ge_10ms_per_million:[2,10,30,100,200]
+                    idle_ge_10ms_per_million:[0.5,2,10,30,100],load_ge_10ms_per_million:[2,10,30,100,200],
+                    worst_us:[5000,10000,20000,50000,100000]
                   }
                 },
                 consistency:{
@@ -1540,24 +1554,8 @@ main() {
         latency_compat_reason="single-vCPU affinity unavailable"
     fi
 
-    # Loaded latency dominates. A single absolute maximum remains visible but
-    # contributes only 5%, preventing one isolated sample from double-penalizing.
-    local s_idle s_load s_idle9999 s_load9999 s_worst latency_f latency_score
-    s_idle="$(vpn_lower_score "$idle_med" 500 1000 1500 2500 5000)"
-    s_load="$(vpn_lower_score "$load_med" 1500 2500 4000 6000 12000)"
-    s_idle9999="$(vpn_lower_score "$idle_p9999" 1500 3000 5000 10000 20000)"
-    s_load9999="$(vpn_lower_score "$load_p9999" 3000 5000 8000 15000 30000)"
-    s_worst="$(vpn_lower_score "$worst_all" 5000 10000 20000 50000 100000)"
-    latency_f="$(awk -v a="$s_idle" -v b="$s_load" -v c="$s_idle9999" -v d="$s_load9999" -v e="$s_worst" \
-        'BEGIN{printf "%.2f",a*.15+b*.40+c*.10+d*.30+e*.05}')"
-    if (( latency_comparable == 1 )); then
-        latency_score="$(awk -v v="$latency_f" 'BEGIN{printf "%d",v+0.5}')"
-    else
-        latency_score="null"
-    fi
-
-    # Keep idle/load spike denominators separate. Combining them previously made
-    # load-only problems look roughly twice as rare when idle was clean.
+    # Keep idle/load spike denominators separate. Combining them would make
+    # load-only problems look roughly twice as rare when idle is clean.
     local idle_gt5_rate load_gt5_rate idle_gt10_rate load_gt10_rate
     idle_gt5_rate="$(awk -v c="$idle_gt5_count" -v n="$idle_samples" 'BEGIN{printf "%.3f",n?c*1000000/n:0}')"
     load_gt5_rate="$(awk -v c="$load_gt5_count" -v n="$load_samples" 'BEGIN{printf "%.3f",n?c*1000000/n:0}')"
@@ -1573,6 +1571,35 @@ main() {
     idle_spike10_s="$(vpn_lower_score "$idle_gt10_rate" 0.5 2 10 30 100)"
     load_spike10_s="$(vpn_lower_score "$load_gt10_rate" 2 10 30 100 200)"
     tail_worst_s="$(vpn_lower_score "$worst_all" 5000 10000 20000 50000 100000)"
+
+    # LATENCY is intentionally stricter under CPU load. The base score gives 75%
+    # of its weight to loaded p99.9/p99.99, uses tighter loaded anchors, and then
+    # applies a small one-way penalty for frequent loaded spikes. Clean hosts never
+    # gain points from the guard; a pathological spike distribution can lose at
+    # most five points. Absolute worst remains only 5% because it is one sample.
+    local s_idle s_load s_idle9999 s_load9999 s_worst
+    local latency_base_f latency_spike_quality latency_spike_penalty latency_f latency_score
+    s_idle="$(vpn_lower_score "$idle_med" 500 1000 1500 2500 5000)"
+    s_load="$(vpn_lower_score "$load_med" 1250 2250 3500 5500 10500)"
+    s_idle9999="$(vpn_lower_score "$idle_p9999" 1500 3000 5000 10000 20000)"
+    s_load9999="$(vpn_lower_score "$load_p9999" 2500 4500 7000 13000 26000)"
+    s_worst="$(vpn_lower_score "$worst_all" 5000 10000 20000 50000 100000)"
+    latency_base_f="$(awk -v a="$s_idle" -v b="$s_load" -v c="$s_idle9999" -v d="$s_load9999" -v e="$s_worst" \
+        'BEGIN{printf "%.3f",a*.10+b*.40+c*.10+d*.35+e*.05}')"
+    latency_spike_quality="$(awk -v s5="$load_spike5_s" -v s10="$load_spike10_s" \
+        'BEGIN{printf "%.3f",s5*.65+s10*.35}')"
+    latency_spike_penalty="$(awk -v q="$latency_spike_quality" 'BEGIN {
+        p=(100-q)*.05; if(p<0)p=0; if(p>5)p=5; printf "%.3f",p
+    }')"
+    latency_f="$(awk -v b="$latency_base_f" -v p="$latency_spike_penalty" 'BEGIN {
+        s=b-p; if(s<0)s=0; if(s>100)s=100; printf "%.2f",s
+    }')"
+    if (( latency_comparable == 1 )); then
+        latency_score="$(awk -v v="$latency_f" 'BEGIN{printf "%d",v+0.5}')"
+    else
+        latency_score="null"
+    fi
+
     tail_f="$(awk -v i="$tail_idle_s" -v l="$tail_load_s" -v i5="$idle_spike5_s" -v l5="$load_spike5_s" \
         -v i10="$idle_spike10_s" -v l10="$load_spike10_s" -v w="$tail_worst_s" \
         'BEGIN{printf "%.2f",i*.15+l*.35+i5*.05+l5*.15+i10*.05+l10*.20+w*.05}')"
@@ -1813,6 +1840,7 @@ main() {
     say "${DIM}STABILITY covers this benchmark run only; rare hourly or daily events are outside its scope.${RESET}"
     say "${DIM}VPN SCORE estimates local host potential, not protocol throughput or network-route quality.${RESET}"
     say "${DIM}VPN SCORE is 40% LATENCY, 30% CPU, 15% bidirectional packet crypto, 5% X25519, 5% stream crypto, and 5% MEM.${RESET}"
+    say "${DIM}LATENCY emphasizes loaded p99.9/p99.99 and applies up to a 5-point penalty for frequent loaded spikes.${RESET}"
     say "${DIM}Route RTT/loss, MTU, NIC/GSO, and Salamander/Gecko overhead are not measured.${RESET}"
     say "${DIM}CRYPTO uses a piecewise-linear 2026 VPS grade. SYSTEM is 80% CPU and 20% MEM. Disk is diagnostic only.${RESET}"
 }

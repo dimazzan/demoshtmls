@@ -8,7 +8,7 @@ export LC_ALL=C
 export LANG=C
 umask 077
 
-SCRIPT_VERSION="2.4.0"
+SCRIPT_VERSION="2.6.0"
 ITERATIONS="${VPSBENCH_ITERATIONS:-6}"
 CYCLIC_SEC="${VPSBENCH_CYCLIC_SEC:-45}"
 CRYPTO_SEC="${VPSBENCH_CRYPTO_SEC:-5}"
@@ -1281,7 +1281,7 @@ create_debug_json() {
                 cgroup:{nr_throttled_delta:$cg_nr_throttled,throttled_usec_delta:$cg_throttled_usec}
               },
               scoring_model: {
-                model_version:"2026-universal-v6",
+                model_version:"2026-universal-v8",
                 score_anchors:[0,45,75,90,100],
                 semantics:{zero:"poor/trash relative to the target VPS class",hundred:"realistic near-term rental ceiling, not a physical maximum"},
                 vpn_score:{
@@ -1298,9 +1298,9 @@ create_debug_json() {
                     lower_is_better_anchors:{ge_5ms_per_million:[10,50,150,500,1000],ge_10ms_per_million:[2,10,30,100,200]}
                   },
                   lower_is_better_anchors:{
-                    idle_p99_9_us:[500,1000,1500,2500,5000],load_p99_9_us:[1250,2250,3500,5500,10500],
-                    idle_p99_99_us:[1500,3000,5000,10000,20000],load_p99_99_us:[2500,4500,7000,13000,26000],
-                    worst_us:[5000,10000,20000,50000,100000]
+                    idle_p99_9_us:[200,850,1350,2300,4750],load_p99_9_us:[400,1900,3150,5000,10000],
+                    idle_p99_99_us:[500,2600,4500,9000,19000],load_p99_99_us:[1000,3800,6300,12000,24500],
+                    worst_us:[3000,8500,18000,45000,95000]
                   }
                 },
                 performance_higher_is_better_anchors:{
@@ -1573,17 +1573,18 @@ main() {
     tail_worst_s="$(vpn_lower_score "$worst_all" 5000 10000 20000 50000 100000)"
 
     # LATENCY is intentionally stricter under CPU load. The base score gives 75%
-    # of its weight to loaded p99.9/p99.99, uses tighter loaded anchors, and then
-    # applies a small one-way penalty for frequent loaded spikes. Clean hosts never
-    # gain points from the guard; a pathological spike distribution can lose at
-    # most five points. Absolute worst remains only 5% because it is one sample.
+    # of its weight to loaded p99.9/p99.99. The 100 anchors reserve the top grade for
+    # exceptional sub-millisecond hosts; moderately tighter 90/75/45/0 anchors spread
+    # modern VPS results without making a clean, non-exceptional host look unusable.
+    # A one-way guard can additionally subtract up to five points for frequent loaded
+    # spikes. Absolute worst remains only 5% because it is one sample.
     local s_idle s_load s_idle9999 s_load9999 s_worst
     local latency_base_f latency_spike_quality latency_spike_penalty latency_f latency_score
-    s_idle="$(vpn_lower_score "$idle_med" 500 1000 1500 2500 5000)"
-    s_load="$(vpn_lower_score "$load_med" 1250 2250 3500 5500 10500)"
-    s_idle9999="$(vpn_lower_score "$idle_p9999" 1500 3000 5000 10000 20000)"
-    s_load9999="$(vpn_lower_score "$load_p9999" 2500 4500 7000 13000 26000)"
-    s_worst="$(vpn_lower_score "$worst_all" 5000 10000 20000 50000 100000)"
+    s_idle="$(vpn_lower_score "$idle_med" 200 850 1350 2300 4750)"
+    s_load="$(vpn_lower_score "$load_med" 400 1900 3150 5000 10000)"
+    s_idle9999="$(vpn_lower_score "$idle_p9999" 500 2600 4500 9000 19000)"
+    s_load9999="$(vpn_lower_score "$load_p9999" 1000 3800 6300 12000 24500)"
+    s_worst="$(vpn_lower_score "$worst_all" 3000 8500 18000 45000 95000)"
     latency_base_f="$(awk -v a="$s_idle" -v b="$s_load" -v c="$s_idle9999" -v d="$s_load9999" -v e="$s_worst" \
         'BEGIN{printf "%.3f",a*.10+b*.40+c*.10+d*.35+e*.05}')"
     latency_spike_quality="$(awk -v s5="$load_spike5_s" -v s10="$load_spike10_s" \
@@ -1840,7 +1841,7 @@ main() {
     say "${DIM}STABILITY covers this benchmark run only; rare hourly or daily events are outside its scope.${RESET}"
     say "${DIM}VPN SCORE estimates local host potential, not protocol throughput or network-route quality.${RESET}"
     say "${DIM}VPN SCORE is 40% LATENCY, 30% CPU, 15% bidirectional packet crypto, 5% X25519, 5% stream crypto, and 5% MEM.${RESET}"
-    say "${DIM}LATENCY emphasizes loaded p99.9/p99.99 and applies up to a 5-point penalty for frequent loaded spikes.${RESET}"
+    say "${DIM}LATENCY uses a strict 2026 VPS scale, reserves 100 for exceptional sub-millisecond tails, and penalizes frequent loaded spikes.${RESET}"
     say "${DIM}Route RTT/loss, MTU, NIC/GSO, and Salamander/Gecko overhead are not measured.${RESET}"
     say "${DIM}CRYPTO uses a piecewise-linear 2026 VPS grade. SYSTEM is 80% CPU and 20% MEM. Disk is diagnostic only.${RESET}"
 }
